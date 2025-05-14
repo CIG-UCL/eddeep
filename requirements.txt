@@ -1,0 +1,9 @@
+matplotlib==3.10.3
+neurite==0.2
+numpy==1.24.0
+pandas==2.2.3
+scipy==1.15.3
+SimpleITK==2.3.1
+SimpleITK==2.5.0
+tensorflow==2.15.0
+voxelmorph==0.2
