@@ -4,6 +4,10 @@
   1) **Translator**: Restore correspondences between images.
   2) **Registrator**: Estimate the distortion and apply correction.
 
+<p align="center">
+<img src="imgs/diagram_eddeep.svg" width="85%">
+</p>
+
 ## Installation
 
 ```bash
@@ -16,8 +20,6 @@ pip install -r requirements.txt
 ## Training Eddeep
 
 ### Preprocessing
-
-
 
 #### 1) Pre-correction with an external tool (for translator training only)
 During training (but not at inference), the translator takes as input images that have been corrected for eddy distortions by an external tool. You can typically use [FSL Eddy](https://web.mit.edu/fsl_v5.0.10/fsl/doc/wiki/eddy(2f)UsersGuide.html) or [Tortoise](https://tortoise.nibib.nih.gov/tortoise) for that.
@@ -79,3 +81,17 @@ python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
                                                   -p 1\
                                                   -e 200 -as 0.5 -ai 0.5
 ```
+
+## References
+
+If you used Eddeep for your work, please cite the following:
+
+&nbsp;[1] A. Legouhy, R. Callaghan, W. Stee, P. Peigneux, H. Azadbakht and H. Zhang.  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Eddeep: Fast eddy-current distortion correction for diffusion MRI with deep learning.  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; MICCAI (2024) [[arxiv]](https://arxiv.org/pdf/2405.10723)
+
+The code uses Voxelmorph bits:
+
+&nbsp;[2] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)
+
+
