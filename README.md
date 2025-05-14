@@ -84,7 +84,7 @@ python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
 
 ## References
 
-If you used Eddeep for your work, please cite the following:
+If you used **Eddeep** for your work, please cite the following:
 
 &nbsp;[1] A. Legouhy, R. Callaghan, W. Stee, P. Peigneux, H. Azadbakht and H. Zhang.  
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Eddeep: Fast eddy-current distortion correction for diffusion MRI with deep learning.  
