@@ -4,7 +4,15 @@
   1) **Translator**: Restore correspondences between images.
   2) **Registrator**: Estimate the distortion and apply correction.
 
-     
+## Installation
+
+```bash
+git clone git@github.com:CIG-UCL/eddeep.git
+cd eddeep
+pip install -r requirements.txt
+```
+
+
 ## Training Eddeep
 
 ### Preprocessing
