@@ -52,6 +52,8 @@ For the dataloader, the 4D DW data must be chopped into 3D volumes and organised
   - For the translator, the input data is pre-corrected and there is a translation target.
   - For the registrator, the input data is the raw DW data.
 
+There must be b=0!
+
 ### Training the translator
 ```bash
 eddeep_dir=<path-to-eddeep>
