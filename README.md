@@ -30,22 +30,22 @@ During training (but not at inference), the translator takes as input images tha
     (assuming b-vectors are uniformly sampled on the sphere).
 
 #### 3) Data organisation:
-The training and validation data for both models must be organised as follow:
+For the dataloader, the 4D DW data must be chopped into 3D volumes and organised according to the following nested structure: {subject_d} > {PED} > b{b-value} > {vol_gradDir}.nii.gz. The target image for translation following: {subject_d} > {PED} > {vol}_b{target b-value}_mean.nii.gz. For example:
 ```
-├── sub1
-│   ├── ped1
-│   │   ├── bval1
-│   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
-│   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
+├── sub_001
+│   ├── AP
+│   │   ├── b0
+│   │   │   ├── vol_dir1.nii.gz
+│   │   │   ├── vol_dir2.nii.gz
 │   │   │   ├── ...
-│   │   ├── bval2
+│   │   ├── b1000
 │   │   │   ├── ...
 │   │   ├── ...
-│   │   ├── sub1_ped1_bvaltarget_meandir.nii.gz (only for translation)
+│   │   ├── vol_b2000_mean.nii.gz (only for translation)
 │   │   ├── ...
-│   └── ped2
+│   └── PA
 │       ├── ...
-├── sub2
+├── sub_002
 │   ├── ...
 ├── ...
 ```
