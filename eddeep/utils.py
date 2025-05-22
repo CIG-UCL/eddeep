@@ -35,8 +35,8 @@ def shift_to_transfo(loc_shift, indexing='ij'):
     return mesh + loc_shift
 
 
-def plot_losses(loss_file, is_val=False, write=True,
-                suptitle='', reord_ind=None, 
+def plot_losses(loss_file, is_val=False, do_log=False, write=True,
+                suptitle='', reord_ind=None, nb_rows=1,
                 ymin=[None], ymax=[None], xmin=[None], xmax=[None]):
 
     tab_loss = pd.read_csv(loss_file, sep=',')
@@ -47,13 +47,16 @@ def plot_losses(loss_file, is_val=False, write=True,
     nb_losses = len(tab_loss.columns) - 1
     if is_val:
         nb_losses = int(nb_losses / 2)
+    nb_cols = int(np.ceil(nb_losses / nb_rows))
     
     if len(xmin) == 1: xmin = xmin * nb_losses
     if len(xmax) == 1: xmax = xmax * nb_losses
     if len(ymin) == 1: ymin = ymin * nb_losses
     if len(ymax) == 1: ymax = ymax * nb_losses
     
-    f, axs = plt.subplots(1, nb_losses, figsize=(20,5))
+    f, axs = plt.subplots(nb_rows, nb_cols, figsize=(12,5))
+    if nb_rows > 1:
+        axs = np.ravel(axs)
     if nb_losses == 1: axs = [axs]
     f.dpi = 200
     plt.rcParams['font.size'] = '10'
@@ -61,9 +64,20 @@ def plot_losses(loss_file, is_val=False, write=True,
     plt.rcParams["ytick.major.size"] = 2
      
     for l in range(nb_losses):
-        axs[l].plot(tab_loss.epoch, tab_loss.loc[:,tab_loss.columns[l+1]], linewidth=0.5, label="training")
         if is_val:
-            axs[l].plot(tab_loss.epoch, tab_loss.loc[:,tab_loss.columns[nb_losses+l+1]], linewidth=0.5, label="validation")
+            if do_log:
+                yloss = np.log(tab_loss.loc[:,tab_loss.columns[nb_losses+l+1]])
+            else:
+                yloss = tab_loss.loc[:,tab_loss.columns[nb_losses+l+1]]
+            axs[l].plot(tab_loss.epoch, yloss, label="validation")
+            
+        if do_log:
+            yloss = np.log(tab_loss.loc[:,tab_loss.columns[l+1]])
+        else:
+            yloss = tab_loss.loc[:,tab_loss.columns[l+1]]
+        axs[l].plot(tab_loss.epoch, yloss, label="training")
+        
+        
         axs[l].set_title(tab_loss.columns[l+1], fontsize=12)
         axs[l].legend(prop={'size': 10})
 
@@ -212,19 +226,19 @@ def change_img_size(img, grid_sz=[96,128,96]):
     return img
         
         
-def pad_image(img, k=5, outSize=None, bg_val=0):
+def pad_image(img, k=5, out_size=None, bg_val=0):
     """
     Pad an image such that image size along each dimension is a multiple of 2^k.
     """
-    inSize = np.array(img.Size(), dtype=np.float32)
-    if outSize is None:
+    in_size = np.array(img.Size(), dtype=np.float32)
+    if out_size is None:
         if k is None:
-            outSize = np.power(2, np.ceil(np.log(inSize)/np.log(2)))
+            out_size = np.power(2, np.ceil(np.log(in_size)/np.log(2)))
         else:
-            outSize = np.ceil(inSize / 2**k) * 2**k
+            out_size = np.ceil(in_size / 2**k) * 2**k
             
-    lowerPad = np.round((outSize - inSize) / 2)
-    upperPad = outSize - inSize - lowerPad
+    lowerPad = np.round((out_size - in_size) / 2)
+    upperPad = out_size - in_size - lowerPad
     
     padder = sitk.ConstantPadImageFilter()
     padder.SetConstant(bg_val)
@@ -234,6 +248,20 @@ def pad_image(img, k=5, outSize=None, bg_val=0):
     paddedImg = padder.Execute(img)
     
     return paddedImg
+
+
+def unpad_image(padded_img, original_size, k=5):
+
+    original_size = np.array(original_size, dtype=np.float32)
+    padded_size = np.array(padded_img.GetSize(), dtype=np.float32)
+
+    lowerPad = np.round((padded_size - original_size) / 2)
+
+    region_extractor = sitk.RegionOfInterestImageFilter()
+    region_extractor.SetSize(original_size.astype(int).tolist())
+    region_extractor.SetIndex([int(x) for x in lowerPad])
+
+    return region_extractor.Execute(padded_img)
 
 
 def jacobian(transfo, outDet=False, dire=None, is_shift=False):
@@ -429,7 +457,7 @@ def grid_img(volshape, omitdim=[2], spacing=5):
     return g
 
 
-def quadratic_unidir_to_dense_shift(matrix, dire, shape, shift_center=True, indexing='ij'):
+def quadratic_unidir_to_dense_shift(matrix, dire, shape, center=None, indexing='ij'):
     """
     Similar to voxelmorph.utils.affine_to_dense_shift(), but for a quadratic transfo.
     """
@@ -450,13 +478,13 @@ def quadratic_unidir_to_dense_shift(matrix, dire, shape, shift_center=True, inde
     mesh = ne.utils.volshape_to_meshgrid(shape, indexing=indexing)
     mesh = [f if f.dtype == matrix.dtype else tf.cast(f, matrix.dtype) for f in mesh]
 
-    if shift_center:
-        mesh = [mesh[f] - (shape[f] - 1) / 2 for f in range(len(shape))]
-
     # transform into a large matrix
     flat_mesh = [ne.utils.flatten(f) for f in mesh]
     mesh_matrix = tf.transpose(tf.stack(flat_mesh, axis=1))  # ndims x nb_voxels
-
+    if center is not None:
+        center = tf.cast(center, dtype=matrix.dtype)[..., None]
+        mesh_matrix -= center    
+        
     # compute locations
     loc_matrix = tf.matmul(matrix, mesh_matrix)              # ndims x nb_voxels
     loc_matrix = loc_matrix * mesh_matrix                    # ndims x nb_voxels

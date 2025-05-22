@@ -1,4 +1,6 @@
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['NEURITE_BACKEND'] = 'tensorflow'
 import sys
 maindir = os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0])))
 sys.path.append(maindir)
@@ -19,41 +21,44 @@ parser = argparse.ArgumentParser(description="Training script for the image tran
 # training and validation data
 parser.add_argument('-t', '--train_data', type=str, required=True, help='Path to the eddy-corrected training data following nested subfolder structure below.')
 parser.add_argument('-v', '--val_data', type=str, required=False, default=None, help='Path to the eddy-corrected validation data following nested subfolder structure below.')
-# ├── sub1
-# │   ├── ped1
-# │   │   ├── bval1
-# │   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
-# │   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
+# ├── sub_001
+# │   ├── AP
+# │   │   ├── b0
+# │   │   │   ├── vol_dir1.nii.gz
+# │   │   │   ├── vol_dir2.nii.gz
 # │   │   │   ├── ...
-# │   │   ├── bval2
+# │   │   ├── b1000
 # │   │   │   ├── ...
 # │   │   ├── ...
-# │   │   ├── sub1_ped1_bvaltarget_meandir.nii.gz 
+# │   │   ├── vol_b2000_mean.nii.gz (only for translation)
 # │   │   ├── ...
-# │   └── ped2
+# │   └── PA
 # │       ├── ...
-# ├── sub2
+# ├── sub_002
 # │   ├── ...
 # ├── ...
-parser.add_argument('-B', '--target_bval', type=int, required=True, help='Target b-value for translation (must be among the existing b-values in the data).')
-parser.add_argument('-k', '--kpad', type=int, required=False, default=5, help='k to pad the input so that its shape is of form 2**k. Has to be >= number encoding steps.')
+parser.add_argument('-B', '--target_bval', type=int, required=True, help='Target b-value for translation (must be among the existing b-values in the data). Required.')
+parser.add_argument('-k', '--kpad', type=int, required=False, default=5, help='k to pad the input so that its shape is of form 2**k. Has to be >= number encoding steps. Default: 5')
 # model and its hyper-paramaters
-parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension).")
+parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension). Required.")
 parser.add_argument('-lr', '--learning-rate', type=float, required=False, default=1e-4, help="Learning rate. Default: 1e-4.")
 parser.add_argument('-denc', '--dis-enc-nf', type=int, nargs='+', required=False, default=[16,32,64,128], help="Number of encoder features for the discriminator. Default: 16 32 64 128.")
 parser.add_argument('-genc', '--gen-enc-nf', type=int, nargs='+', required=False, default=[32,64,128,256], help="Number of encoder features for the generator. Default: 32 64 128 256.")
 parser.add_argument('-gdec', '--gen-dec-nf', type=int, nargs='+', required=False, default=[256,128,64,32], help="Number of decoder features for the generator. Default: 256 128 64 32.")
-parser.add_argument('-e', '--epochs', type=int, required=True, help="Number of epochs.")
+parser.add_argument('-e', '--epochs', type=int, required=True, help="Number of epochs. Required.")
 parser.add_argument('-b', '--batch-size', type=int, required=False, default=1, help='Batch size. Default: 1.')
+parser.add_argument('-gan', '--gan', type=int, required=False, default=1, help='Use GAN or simple U-Net (1: GAN, 0: simple U-Net). Default: 1.')
+parser.add_argument('-l', '--loss', type=str, required=False, default='l1', help="Loss between generated and real image ('l1' or 'l2'). Default: 'l1'.")
 # augmentation
 parser.add_argument('-as', '--aug_spat_prob', type=float, required=False, default=0, help='Probability of performing spatial augmentation. Default: 0.')
 parser.add_argument('-ai', '--aug_int_prob', type=float, required=False, default=0, help='Probability of performing intensity augmentation. Default: 0.')
 # other
-parser.add_argument('-r', '--resume', type=int, required=False, default=0, help='Resume a traning that stopped for some reason (1: yes, 0: no). Default: 0.')
-parser.add_argument('-seed', '--seed', type=int, required=False, default=None, help='Seed for random. Default: None.')
+parser.add_argument('-r', '--resume', type=int, required=False, default=0, help='Resume a training that stopped for some reason (1: yes, 0: no). Default: 0.')
+parser.add_argument('-seed', '--seed', type=int, required=False, default=None, help='Seed for randomess. Default: None.')
 
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 args.resume = bool(args.resume)
+args.gan = bool(args.gan)
 
 if args.seed is not None:
     random.seed(args.seed)
@@ -118,8 +123,9 @@ loss_file= args.model + '_losses.csv'
 
 if args.resume:
     # load existing model
-    discriminator = eddeep.models.pix2pix_dis.load(dis_last_path)
     generator = eddeep.models.pix2pix_gen.load(gen_last_path)
+    if args.gan:
+        discriminator = eddeep.models.pix2pix_dis.load(dis_last_path)
     tab_loss = pandas.read_csv(loss_file, sep=',')
     if is_val:
         best_img_loss = np.min(tab_loss.val_img0 + tab_loss.val_img) / 2
@@ -130,13 +136,15 @@ if args.resume:
 
 else:
     # build the models
-    discriminator = eddeep.models.pix2pix_dis(inshape,
-                                              nb_feats=args.dis_enc_nf)   
     generator = eddeep.models.pix2pix_gen(volshape=inshape,
                                           nb_enc_features=args.gen_enc_nf,
                                           nb_dec_features=args.gen_dec_nf + [1],
                                           final_activation=None,
                                           name='gen')
+    if args.gan:
+        discriminator = eddeep.models.pix2pix_dis(inshape,
+                                                  nb_feats=args.dis_enc_nf)   
+        
     initial_epoch = 0
     try:
         os.remove(loss_file)
@@ -144,118 +152,167 @@ else:
         pass
     f = open(loss_file,'w')
     if is_val:
-        f.write('epoch,dis0_real,dis0_fake,gen0,img0,dis_real,dis_fake,gen,img,val_dis0_real,val_dis0_fake,val_gen0,val_img0,val_dis_real,val_dis_fake,val_gen,val_img\n') 
+        if args.gan:
+            f.write('epoch,dis0_real,dis0_fake,gen0,img0,dis_real,dis_fake,gen,img,val_dis0_real,val_dis0_fake,val_gen0,val_img0,val_dis_real,val_dis_fake,val_gen,val_img\n') 
+        else:
+            f.write('epoch,img0,img,val_img0,val_img\n') 
     else:
-        f.write('epoch,dis0_real,dis0_fake,gen0,img0,dis_real,dis_fake,gen,img\n')
+        f.write('epoch,img0,img\n')
     f.close()
     best_img_loss = np.Inf
-        
-discriminator.compile(loss='mse', optimizer=optimizer)
-gan = eddeep.models.gan(generator, discriminator, inshape)
-gan.compile(loss=['mse','mse'], loss_weights=[1,100], optimizer=optimizer)
 
-tf.keras.utils.plot_model(discriminator, to_file=args.model + '_dis_plot.png', show_shapes=True, show_layer_names=True, expand_nested=True)
+if args.loss == 'l1': loss = 'mae'
+elif args.loss == 'l2': loss = 'mse'
+if args.gan:   
+    gan = eddeep.models.gan(generator, discriminator, inshape)
+    gan.compile(loss=['mse',loss], loss_weights=[1,100], optimizer=optimizer)   
+    discriminator.compile(loss='mse', optimizer=optimizer)
+    tf.keras.utils.plot_model(discriminator, to_file=args.model + '_dis_plot.png', show_shapes=True, show_layer_names=True, expand_nested=True)
+    tf.keras.utils.plot_model(gan, to_file=args.model + '_gan_plot.png', show_shapes=True, show_layer_names=True)
+else:
+    generator.compile(loss=loss, optimizer=optimizer)
 tf.keras.utils.plot_model(generator, to_file=args.model + '_gen_plot.png', show_shapes=True, show_layer_names=True, expand_nested=True)
-tf.keras.utils.plot_model(gan, to_file=args.model + '_gan_plot.png', show_shapes=True, show_layer_names=True)
 
 #%% Train the model
 
 n_train_steps = n_train // args.batch_size
 if is_val:
     n_val_steps = n_val // args.batch_size
+nb_substeps = 14    # a bit arbitrary, so that each b-value has a chance to pop a few times
 
-patch_shape = discriminator.layers[-1].output_shape[1:-1]
-real = tf.ones((args.batch_size, *patch_shape, 1))
-fake = tf.zeros((args.batch_size, *patch_shape, 1))
+if args.gan:
+    patch_shape = discriminator.layers[-1].output_shape[1:-1]
+    real = tf.ones((args.batch_size, *patch_shape, 1))
+    fake = tf.zeros((args.batch_size, *patch_shape, 1))
 
 for epoch in range(initial_epoch, args.epochs):
     t = time.time()
 
     print('epoch: %d/%d' % (epoch+1, args.epochs), end=' |')
-    dis0_real_loss_epoch = []; val_dis0_real_loss_epoch = []
-    dis0_fake_loss_epoch = []; val_dis0_fake_loss_epoch = []
-    gen0_loss_epoch = [];      val_gen0_loss_epoch = []
     img0_loss_epoch = [];      val_img0_loss_epoch = []
-    dis_real_loss_epoch = [];  val_dis_real_loss_epoch = []
-    dis_fake_loss_epoch = [];  val_dis_fake_loss_epoch = []
-    gen_loss_epoch = [];       val_gen_loss_epoch = []
     img_loss_epoch = [];       val_img_loss_epoch = []
+    if args.gan:
+        dis0_real_loss_epoch = []; val_dis0_real_loss_epoch = []
+        dis0_fake_loss_epoch = []; val_dis0_fake_loss_epoch = []
+        gen0_loss_epoch = [];      val_gen0_loss_epoch = []     
+        dis_real_loss_epoch = [];  val_dis_real_loss_epoch = []
+        dis_fake_loss_epoch = [];  val_dis_fake_loss_epoch = []
+        gen_loss_epoch = [];       val_gen_loss_epoch = []
+        
     
     for _ in range(n_train_steps):
-        x0, x, y = next(gen_train)
+        for substep in range(nb_substeps):
+            x0, x, y = next(gen_train)
             
-        yhat0 = generator.predict(x0, verbose=0)
-        dis0_real_loss = discriminator.train_on_batch([x0,y], real) 
-        dis0_fake_loss = discriminator.train_on_batch([x0,yhat0], fake)
-        gen0_loss, _, img0_loss = gan.train_on_batch(x0, [real, y])     
-        dis0_real_loss_epoch += [dis0_real_loss] 
-        dis0_fake_loss_epoch += [dis0_fake_loss] 
-        gen0_loss_epoch += [gen0_loss]
-        img0_loss_epoch += [img0_loss]
-        
-        yhat = generator.predict(x, verbose=0)
-        dis_real_loss = discriminator.train_on_batch([x,y], real) 
-        dis_fake_loss = discriminator.train_on_batch([x,yhat], fake)
-        gen_loss, _, img_loss = gan.train_on_batch(x, [real, y])     
-        dis_real_loss_epoch += [dis_real_loss] 
-        dis_fake_loss_epoch += [dis_fake_loss] 
-        gen_loss_epoch += [gen_loss]
-        img_loss_epoch += [img_loss]
+            if args.gan:
+                yhat0 = generator(x0, training=True)
+                discriminator.trainable = True
+                dis0_real_loss = discriminator.train_on_batch([x0,y], real) 
+                dis0_fake_loss = discriminator.train_on_batch([x0,yhat0], fake)
+                discriminator.trainable = False
+                gen0_loss, _, img0_loss = gan.train_on_batch(x0, [real, y])     
+                dis0_real_loss_epoch += [dis0_real_loss] 
+                dis0_fake_loss_epoch += [dis0_fake_loss] 
+                gen0_loss_epoch += [gen0_loss]
+            else:
+                img0_loss = generator.train_on_batch(x0, y)
+            img0_loss_epoch += [img0_loss]
+            
+            if args.gan:
+                yhat = generator(x, training=True)
+                discriminator.trainable = True
+                dis_real_loss = discriminator.train_on_batch([x,y], real) 
+                dis_fake_loss = discriminator.train_on_batch([x,yhat], fake)
+                discriminator.trainable = False
+                gen_loss, _, img_loss = gan.train_on_batch(x, [real, y])     
+                dis_real_loss_epoch += [dis_real_loss] 
+                dis_fake_loss_epoch += [dis_fake_loss] 
+                gen_loss_epoch += [gen_loss]
+            else:
+                img_loss = generator.train_on_batch(x, y)
+            img_loss_epoch += [img_loss]
         
         print('-'*args.batch_size, end='')
         
     if is_val:
         for _ in range(n_val_steps):
-            x0, x, y = next(gen_val)
+            for substep in range(nb_substeps):
+                x0, x, y = next(gen_val)
                 
-            yhat0 = generator.predict(x0, verbose=0)
-            dis0_real_loss = discriminator.test_on_batch([x0,y], real) 
-            dis0_fake_loss = discriminator.test_on_batch([x0,yhat0], fake)
-            gen0_loss, _, img0_loss = gan.test_on_batch(x0, [real, y])     
-            val_dis0_real_loss_epoch += [dis0_real_loss] 
-            val_dis0_fake_loss_epoch += [dis0_fake_loss] 
-            val_gen0_loss_epoch += [gen0_loss]
-            val_img0_loss_epoch += [img0_loss]
-            
-            yhat = generator.predict(x, verbose=0)
-            dis_real_loss = discriminator.test_on_batch([x,y], real) 
-            dis_fake_loss = discriminator.test_on_batch([x,yhat], fake)
-            gen_loss, _, img_loss = gan.test_on_batch(x, [real, y])     
-            val_dis_real_loss_epoch += [dis_real_loss] 
-            val_dis_fake_loss_epoch += [dis_fake_loss] 
-            val_gen_loss_epoch += [gen_loss]
-            val_img_loss_epoch += [img_loss]
-            
+                if args.gan:
+                    yhat0 = generator(x0, training=True)
+                    discriminator.trainable = True
+                    dis0_real_loss = discriminator.test_on_batch([x0,y], real) 
+                    dis0_fake_loss = discriminator.test_on_batch([x0,yhat0], fake)
+                    discriminator.trainable = False
+                    gen0_loss, _, img0_loss = gan.test_on_batch(x0, [real, y])     
+                    val_dis0_real_loss_epoch += [dis0_real_loss] 
+                    val_dis0_fake_loss_epoch += [dis0_fake_loss] 
+                    val_gen0_loss_epoch += [gen0_loss]
+                else:
+                    img0_loss = generator.train_on_batch(x0, y)
+                val_img0_loss_epoch += [img0_loss]
+                
+                if args.gan:
+                    yhat = generator(x, training=True)
+                    discriminator.trainable = True
+                    dis_real_loss = discriminator.test_on_batch([x,y], real) 
+                    dis_fake_loss = discriminator.test_on_batch([x,yhat], fake)
+                    discriminator.trainable = False
+                    gen_loss, _, img_loss = gan.test_on_batch(x, [real, y])     
+                    val_dis_real_loss_epoch += [dis_real_loss] 
+                    val_dis_fake_loss_epoch += [dis_fake_loss] 
+                    val_gen_loss_epoch += [gen_loss]
+                else:
+                    img_loss = generator.train_on_batch(x, y)
+                val_img_loss_epoch += [img_loss]
+
             print('.'*args.batch_size, end='')
-                    
-    dis0_real_loss_epoch = np.mean(dis0_real_loss_epoch);
-    dis0_fake_loss_epoch = np.mean(dis0_fake_loss_epoch);
-    gen0_loss_epoch = np.mean(gen0_loss_epoch);
-    img0_loss_epoch = np.mean(img0_loss_epoch);
-    dis_real_loss_epoch = np.mean(dis_real_loss_epoch);
-    dis_fake_loss_epoch = np.mean(dis_fake_loss_epoch);
-    gen_loss_epoch = np.mean(gen_loss_epoch);
-    img_loss_epoch = np.mean(img_loss_epoch);
+    
+    if args.gan:             
+        dis0_real_loss_epoch = np.mean(dis0_real_loss_epoch)
+        dis0_fake_loss_epoch = np.mean(dis0_fake_loss_epoch)
+        gen0_loss_epoch = np.mean(gen0_loss_epoch)
+        dis_real_loss_epoch = np.mean(dis_real_loss_epoch)
+        dis_fake_loss_epoch = np.mean(dis_fake_loss_epoch)
+        gen_loss_epoch = np.mean(gen_loss_epoch)
+    img0_loss_epoch = np.mean(img0_loss_epoch)
+    img_loss_epoch = np.mean(img_loss_epoch)
     if is_val:
-        val_dis0_real_loss_epoch = np.mean(val_dis0_real_loss_epoch)
-        val_dis0_fake_loss_epoch = np.mean(val_dis0_fake_loss_epoch)
-        val_gen0_loss_epoch = np.mean(val_gen0_loss_epoch)
-        val_img0_loss_epoch = np.mean(val_img0_loss_epoch)
-        val_dis_real_loss_epoch = np.mean(val_dis_real_loss_epoch)
-        val_dis_fake_loss_epoch = np.mean(val_dis_fake_loss_epoch) 
-        val_gen_loss_epoch = np.mean(val_gen_loss_epoch)
-        val_img_loss_epoch = np.mean(val_img_loss_epoch)
-        
+        if args.gan:
+            val_dis0_real_loss_epoch = np.mean(val_dis0_real_loss_epoch)
+            val_dis0_fake_loss_epoch = np.mean(val_dis0_fake_loss_epoch)
+            val_gen0_loss_epoch = np.mean(val_gen0_loss_epoch)
+            val_dis_real_loss_epoch = np.mean(val_dis_real_loss_epoch)
+            val_dis_fake_loss_epoch = np.mean(val_dis_fake_loss_epoch) 
+            val_gen_loss_epoch = np.mean(val_gen_loss_epoch)
+        else:
+            val_img0_loss_epoch = np.mean(val_img0_loss_epoch)
+            val_img_loss_epoch = np.mean(val_img_loss_epoch)
+            
         
     print('| ' + str(np.round(time.time()-t,3)) + ' s')
-    print('  train (b=0, dw) | dis_real (%.3f, %.3f), dis_fake: (%.3f, %.3f), gen: (%.3f, %.3f), img: (%.3e, %.3e)' % (dis0_real_loss_epoch, dis_real_loss_epoch, dis0_fake_loss_epoch, dis_fake_loss_epoch, gen0_loss_epoch, gen_loss_epoch, img0_loss_epoch, img_loss_epoch))
+    if args.gan:
+        print('  train (b=0, dw) | dis_real (%.3f, %.3f), dis_fake: (%.3f, %.3f), gen: (%.3f, %.3f), img: (%.3e, %.3e)' % (dis0_real_loss_epoch, dis_real_loss_epoch, dis0_fake_loss_epoch, dis_fake_loss_epoch, gen0_loss_epoch, gen_loss_epoch, img0_loss_epoch, img_loss_epoch))
+    else:
+        print('  train (b=0, dw) | img: (%.3e, %.3e)' % (img0_loss_epoch, img_loss_epoch))
     if is_val:
-        print('  val   (b=0, dw) | dis_real (%.3f, %.3f), dis_fake: (%.3f, %.3f), gen: (%.3f, %.3f), img: (%.3e, %.3e)' % (val_dis0_real_loss_epoch, val_dis_real_loss_epoch, val_dis0_fake_loss_epoch, val_dis_fake_loss_epoch, val_gen0_loss_epoch, val_gen_loss_epoch, val_img0_loss_epoch, val_img_loss_epoch))
+        if args.gan:
+            print('  val   (b=0, dw) | dis_real (%.3f, %.3f), dis_fake: (%.3f, %.3f), gen: (%.3f, %.3f), img: (%.3e, %.3e)' % (val_dis0_real_loss_epoch, val_dis_real_loss_epoch, val_dis0_fake_loss_epoch, val_dis_fake_loss_epoch, val_gen0_loss_epoch, val_gen_loss_epoch, val_img0_loss_epoch, val_img_loss_epoch))
+        else:
+            print('  val   (b=0, dw) | img: (%.3e, %.3e)' % (val_img0_loss_epoch, val_img_loss_epoch))
+    
     f = open(loss_file,'a')
     if is_val:
-        f.write(str(epoch+1) + ',' + str(dis0_real_loss_epoch)+ ',' + str(dis0_fake_loss_epoch) + ',' + str(gen0_loss_epoch) + ',' + str(img0_loss_epoch) + ',' + str(dis_real_loss_epoch)+ ',' + str(dis_fake_loss_epoch) + ',' + str(gen_loss_epoch) + ',' + str(img_loss_epoch) + ',' + str(val_dis0_real_loss_epoch)+ ',' + str(val_dis0_fake_loss_epoch) + ',' + str(val_gen0_loss_epoch) + ',' + str(val_img0_loss_epoch) + ',' + str(val_dis_real_loss_epoch)+ ',' + str(val_dis_fake_loss_epoch) + ',' + str(val_gen_loss_epoch) + ',' + str(val_img_loss_epoch) + '\n')
+        if args.gan:
+            f.write(str(epoch+1) + ',' + str(dis0_real_loss_epoch)+ ',' + str(dis0_fake_loss_epoch) + ',' + str(gen0_loss_epoch) + ',' + str(img0_loss_epoch) + ',' + str(dis_real_loss_epoch)+ ',' + str(dis_fake_loss_epoch) + ',' + str(gen_loss_epoch) + ',' + str(img_loss_epoch) + ',' + str(val_dis0_real_loss_epoch)+ ',' + str(val_dis0_fake_loss_epoch) + ',' + str(val_gen0_loss_epoch) + ',' + str(val_img0_loss_epoch) + ',' + str(val_dis_real_loss_epoch)+ ',' + str(val_dis_fake_loss_epoch) + ',' + str(val_gen_loss_epoch) + ',' + str(val_img_loss_epoch) + '\n')
+        else:
+            f.write(str(epoch+1) + ',' + str(img0_loss_epoch) + ',' + str(img_loss_epoch) + ',' + str(val_img0_loss_epoch) + ',' + str(val_img_loss_epoch) + '\n')
     else:
-        f.write(str(epoch+1) + ',' + str(dis0_real_loss_epoch)+ ',' + str(dis0_fake_loss_epoch) + ',' + str(gen0_loss_epoch) + ',' + str(img0_loss_epoch) + ',' + str(dis_real_loss_epoch)+ ',' + str(dis_fake_loss_epoch) + ',' + str(gen_loss_epoch) + ',' + str(img_loss_epoch) + '\n')
+        if args.gan:
+            f.write(str(epoch+1) + ',' + str(dis0_real_loss_epoch)+ ',' + str(dis0_fake_loss_epoch) + ',' + str(gen0_loss_epoch) + ',' + str(img0_loss_epoch) + ',' + str(dis_real_loss_epoch)+ ',' + str(dis_fake_loss_epoch) + ',' + str(gen_loss_epoch) + ',' + str(img_loss_epoch) + '\n')
+        else:
+            f.write(str(epoch+1) + ',' + str(img0_loss_epoch) + ',' + str(img_loss_epoch) + '\n')
     f.close()
     
     if is_val:
@@ -265,12 +322,14 @@ for epoch in range(initial_epoch, args.epochs):
     if val_img_loss_meanEpoch < best_img_loss:
         best_img_loss = val_img_loss_meanEpoch
         generator.save(gen_path)
-        discriminator.save(dis_path)
+        if args.gan:
+            discriminator.save(dis_path)
     generator.save(gen_last_path)
-    discriminator.save(dis_last_path)
+    if args.gan:
+        discriminator.save(dis_last_path)
 
-    y0_fake = generator.predict(sample[0], verbose=0)
-    y_fake = generator.predict(sample[1], verbose=0)
+    y0_fake = generator(sample[0])
+    y_fake = generator(sample[1])
     
     f, axs = plt.subplots(2,5); f.dpi = 500
     plt.subplots_adjust(wspace=0.01,hspace=-0.58)
@@ -302,7 +361,7 @@ for epoch in range(initial_epoch, args.epochs):
     plt.savefig(os.path.join(args.model + '_imgs','img_' + str(epoch) + '.png'), bbox_inches='tight',dpi=300)
     plt.close()
 
-eddeep.utils.plot_losses(loss_file, is_val=is_val)
+eddeep.utils.plot_losses(loss_file, is_val=is_val, nb_rows=2)
 
 
 

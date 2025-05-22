@@ -8,6 +8,17 @@ import eddeep.augmentation
 # from dmipy.core import acquisition_scheme
 
 
+def nb_vols_per_bval(sub, ped):
+    
+    list_bval = sorted(next(os.walk(os.path.join(sub, ped)))[1])
+    list_bval.remove('b0')
+    nb_vols = []
+    for bval in list_bval:
+        list_dw = sorted(glob.glob(os.path.join(sub, ped, bval, '*.nii*')))
+        nb_vols += [len(list_dw)]
+
+    return nb_vols, list_bval
+
 def eddeep_fromDWI(subdirs,
                    k = 4,
                    ped = None,
@@ -20,6 +31,7 @@ def eddeep_fromDWI(subdirs,
                    spat_aug_prob=0,
                    int_pair_aug_prob=0,
                    aug_dire = None,
+                   prob_bval=True,
                    batch_size=1):
     # sub
     #   |_ PED
@@ -45,13 +57,16 @@ def eddeep_fromDWI(subdirs,
             
             # random bval
             if bval is None:
-                list_bval = sorted(next(os.walk(os.path.join(sub_i, ped_i)))[1])
+                nb_vols, list_bval = nb_vols_per_bval(sub_i, ped_i)
+                if prob_bval:
+                    list_bval = np.repeat(list_bval, nb_vols).tolist()
                 ind_bval = np.random.choice(range(1, len(list_bval)))
                 bval_i = list_bval[ind_bval]
             else: 
                 bval_i = 'b' + str(bval)
             if target_bval == 'same':
                 target_bval = bval
+                
             # random DW and b=0 image  
             if b0_file is None:
                 list_b0 = sorted(glob.glob(os.path.join(sub_i, ped_i, 'b0', '*.nii*')))
@@ -71,7 +86,6 @@ def eddeep_fromDWI(subdirs,
                 
             b0 = sitk.ReadImage(os.path.join(sub_i, ped_i, 'b0', b0_file_i))
             dw = sitk.ReadImage(os.path.join(sub_i, ped_i, bval_i, dw_file_i))
-
             if get_dwmean:
                 dw_mean = sitk.ReadImage(glob.glob(os.path.join(sub_i, ped_i,'*_b' + str(target_bval) + '_mean.nii.gz'))[0])
             

@@ -37,20 +37,23 @@ class AffCoeffToMatrix(Layer):
     where R: rotation, U: direction of scaling, D: scaling, T: translation.
     """
 
-    def __init__(self, ndims, transfo_type='affine', dire=None, **kwargs):
+    def __init__(self, ndims, transfo_type='affine', dire=None, center=None, **kwargs):
+        
         self.ndims = ndims
         if ndims != 3 and ndims != 2:
             raise NotImplementedError('2D or 3D only')
         self.transfo_type = transfo_type
         self.dire = dire
+        self.center = center[None, ...] if center is not None else None
+        
         super().__init__(**kwargs)
         
 
     def call(self, aff_params):
         """
-        transfo_type == 'affine'     -> aff_params = [trans, rot, scalDir, scal], shape=(3,3,3,3) in 3D.  
-                        'rigid'      -> aff_params = [trans, rot],                shape=(3,3) in 3D.
-                        'dir_affine' -> aff_params = [trans, lin, dir],           shape=(1,3,1) in 3D.
+        transfo_type == 'affine'     -> aff_params = [trans, rot, scalDir, scal], shape=[(b,3),(b,3),(b,3),(b,3)] in 3D.  
+                        'rigid'      -> aff_params = [trans, rot],                shape=[(b,3),(b,3)] in 3D.
+                        'dir_affine' -> aff_params = [trans, lin],                shape=[(b,1),(b,3)] in 3D.
         """
         
         if self.transfo_type == 'affine':
@@ -72,10 +75,12 @@ class AffCoeffToMatrix(Layer):
             trans = tf.concat(trans, axis=1)
             lin = tf.map_fn(self._single_linDirMat, aff_params[1], dtype=tf.float32)
             lin = self.expm(lin)
-                 
-        mat = tf.concat((lin, tf.expand_dims(trans,axis=2)), axis=2)
         
-        return mat      
+        if self.center is not None:
+            trans = trans + self.center - tf.matmul(lin, self.center[...,None])[..., 0]
+            
+        return tf.concat((lin, trans[..., None]), axis=2)  
+    
 
     def _single_rotMat(self, vector):
         
@@ -153,7 +158,7 @@ class QuadUnidirToDenseShift(Layer):
     Converts an affine transform to a dense shift transform.
     """
 
-    def __init__(self, shape, dire, shift_center=True, **kwargs):
+    def __init__(self, shape, dire, center=None, **kwargs):
         """
         Parameters:
             shape: Target shape of dense shift.
@@ -161,7 +166,7 @@ class QuadUnidirToDenseShift(Layer):
         self.dire = dire
         self.shape = shape
         self.ndims = len(shape)
-        self.shift_center = shift_center
+        self.center = center if center is not None else None
         super().__init__(**kwargs)
 
     def get_config(self):
@@ -170,7 +175,7 @@ class QuadUnidirToDenseShift(Layer):
             'dire': self.dire,
             'shape': self.shape,
             'ndims': self.ndims,
-            'shift_center': self.shift_center,
+            'center': self.center,
         })
         return config
 
@@ -183,7 +188,7 @@ class QuadUnidirToDenseShift(Layer):
         Parameters:
             matrix: symmetric matrix of shape [B, N, N].
         """
-        single = lambda mat: utils.quadratic_unidir_to_dense_shift(mat, self.dire, self.shape, shift_center=self.shift_center)
+        single = lambda mat: utils.quadratic_unidir_to_dense_shift(mat, self.dire, self.shape, self.center)
         return tf.map_fn(single, matrix)
     
     
@@ -257,9 +262,8 @@ class get_real_transfo(Layer):
     
 class JacobianMultiplyIntensities(Layer):
 
-    def __init__(self, indexing='ij', outDet=True, is_shift=True, dire=None, **kwargs):
+    def __init__(self, indexing='ij', is_shift=True, dire=None, **kwargs):
         self.indexing = indexing
-        self.outDet = outDet
         self.is_shift = is_shift
         self.dire = dire
         super(self.__class__, self).__init__(**kwargs)
@@ -272,7 +276,7 @@ class JacobianMultiplyIntensities(Layer):
         input : [moved_image, loc_shift]
         output : Moved image with intensities multiplied by Jacobian determinant of the transformation.
         """
-        _, jacTransfo = utils.jacobian(inputs[1], dire=self.dire, outDet=self.outDet, is_shift=self.is_shift)
+        _, jacTransfo = utils.jacobian(inputs[1], dire=self.dire, outDet=True, is_shift=self.is_shift)
         jacTransfo = tf.math.abs(jacTransfo)        
         
         return tf.expand_dims(jacTransfo,-1) * inputs[0]

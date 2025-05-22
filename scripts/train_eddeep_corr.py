@@ -20,41 +20,41 @@ parser = argparse.ArgumentParser(description="Training script for the image tran
 # training and validation data, pre-trained translator
 parser.add_argument('-t', '--train_data', type=str, required=True, help='Path to the raw training data following nested subfolder structure below.')
 parser.add_argument('-v', '--val_data', type=str, required=False, default=None, help='Path to the raw validation data following nested subfolder structure below.')
-# ├── sub1
-# │   ├── ped1
-# │   │   ├── bval1
-# │   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
-# │   │   │   ├── sub1_ped1_bval1_dir1.nii.gz
+# ├── sub_001
+# │   ├── AP
+# │   │   ├── b0
+# │   │   │   ├── vol_dir1.nii.gz
+# │   │   │   ├── vol_dir2.nii.gz
 # │   │   │   ├── ...
-# │   │   ├── bval2
+# │   │   ├── b1000
 # │   │   │   ├── ...
 # │   │   ├── ...
-# │   │   ├── sub1_ped1_bvaltarget_meandir.nii.gz 
+# │   │   ├── vol_b2000_mean.nii.gz (only for translation)
 # │   │   ├── ...
-# │   └── ped2
+# │   └── PA
 # │       ├── ...
-# ├── sub2
+# ├── sub_002
 # │   ├── ...
 # ├── ...
-parser.add_argument('-tr', '--trans', type=str, required=True, help="Path to the pre-trained image translation model.")
+parser.add_argument('-tr', '--trans', type=str, required=True, help="Path to the pre-trained image translation model. Required.")
 parser.add_argument('-k', '--kpad', type=int, required=False, default=5, help='k to pad the input so that its shape is of form 2**k. Has to be >= number encoding steps for deformable transfo, and equal to the one used for the translator.')
 # distortion constraints
-parser.add_argument('-p', '--ped', type=int, required=True, help='Axis number of the phase encoding directions (starting at 0). Usually 1 for AP/PA.')
+parser.add_argument('-p', '--ped', type=int, required=True, help='Axis number of the phase encoding directions (starting at 0). Usually 1 for AP/PA. Required.')
 parser.add_argument('-trsf', '--transfo', type=str, required=False, default='quadratic', help="Type of geometric transformation for the distortion ('linear', 'quadratic' or 'deformable'). Default: 'quadratic'.")
 # model and its hyper-paramaters
-parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension).")
+parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension). Required.")
 parser.add_argument('-lr', '--learning-rate', type=float, required=False, default=1e-4, help="Learning rate. Default: 1e-4.")
 parser.add_argument('-enc', '--enc-nf', type=int, nargs='+', required=False, default=[16,32,40,48,56], help="Number of encoder features for the generator. Default: 16 32 40 48 56.")
 parser.add_argument('-dec', '--dec-nf', type=int, nargs='+', required=False, default=[56,48,40,32,24,16,16], help="Number of decoder features for the generator (only for deformable transfo). Default: 56 48 40 32 24 16 16.")
 parser.add_argument('-den', '--dense-nf', type=int, nargs='+', required=False, default=[64], help="Number of encoder features for the generator (only for linear or quadratic transfo). Default: 32 64 128 256.")
-parser.add_argument('-e', '--epochs', type=int, required=True, help="Number of epochs.")
+parser.add_argument('-e', '--epochs', type=int, required=True, help="Number of epochs. Required.")
 parser.add_argument('-b', '--batch-size', type=int, required=False, default=1, help='Batch size. Default: 1.')
+parser.add_argument('-l', '--loss', type=str, required=False, default='l2', help="Loss between translated corrected DW image and translated b=0 image ('l1' or 'l2'). Default: 'l2'.")
 # augmentation
 parser.add_argument('-as', '--aug_spat_prob', type=float, required=False, default=0, help='Probability of performing spatial augmentation. Default: 0.')
-parser.add_argument('-ai', '--aug_int_prob', type=float, required=False, default=0, help='Probability of performing intensity augmentation. Default: 0.')
 # other
-parser.add_argument('-r', '--resume', type=int, required=False, default=0, help='Resume a traning that stopped for some reason (1: yes, 0: no). Default: 0.')
-parser.add_argument('-seed', '--seed', type=int, required=False, default=None, help='Seed for random. Default: None.')
+parser.add_argument('-r', '--resume', type=int, required=False, default=0, help='Resume a training that stopped for some reason (1: yes, 0: no). Default: 0.')
+parser.add_argument('-seed', '--seed', type=int, required=False, default=None, help='Seed for randomness. Default: None.')
 
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 args.resume = bool(args.resume)
@@ -77,14 +77,12 @@ is_val = args.val_data is not None
 # training images
 sub_dirs = sorted(glob.glob(os.path.join(args.train_data, '*', '')))
 random.shuffle(sub_dirs)
-
+n_train = len(sub_dirs)
 gen_train = eddeep.generators.eddeep_fromDWI(subdirs=sub_dirs,
                                              k=args.kpad,
-                                             spat_aug_prob = args.aug_spat_prob,
-                                             aug_dire = args.ped,
+                                             spat_aug_prob=args.aug_spat_prob,
+                                             aug_dire=args.ped,
                                              batch_size=args.batch_size)
-
-n_train = len(sub_dirs)
 
 # validation images
 if not is_val:  
@@ -92,11 +90,12 @@ if not is_val:
     sample = next(gen_train)
 else:
     sub_dirs_val = sorted(glob.glob(os.path.join(args.val_data, '*', '')))
+    random.shuffle(sub_dirs_val)
+    n_val = len(sub_dirs_val)
     gen_val = eddeep.generators.eddeep_fromDWI(subdirs=sub_dirs_val,                                                          
                                                k=args.kpad,
-                                               spat_aug_prob = 0,
+                                               spat_aug_prob=0,
                                                batch_size=args.batch_size)
-    n_val = len(sub_dirs_val)
     sample = next(gen_val)
     
 
@@ -108,8 +107,11 @@ sl_axi = int(sample[0].shape[1]*0.45)
 #%% Prepare and build the model
 
 optimizer = tf.keras.optimizers.legacy.Adam(learning_rate=args.learning_rate)
+
 loss_weights = [1]
-losses = [eddeep.losses.wMSE(is_stacked=True).loss]
+if args.loss == 'l1': loss = 'mae'
+elif args.loss == 'l2': loss = 'mse'
+losses = [loss]
 if args.transfo == 'deformable':
     losses += [voxelmorph.losses.Grad('l2').loss]
     loss_weights += [0.05]
@@ -119,11 +121,10 @@ model_last_path = args.model + '_last.h5'
 loss_file= args.model + '_losses.csv'
 
 translator = eddeep.models.pix2pix_gen.load(args.trans)
-translator.trainable = False 
 
 if args.resume:
     # load existing model
-    registrator = eddeep.models.eddy_reg.load(args.model)
+    registrator = eddeep.models.eddy_reg.load(model_last_path)
     tab_loss = pandas.read_csv(loss_file, sep=',')
     if is_val:
         best_loss = np.min(tab_loss.val_loss)
@@ -172,8 +173,10 @@ if is_val:
     monitor='val_loss'
 else:
     monitor='loss'
+nb_substeps = 14    # a bit arbitrary, so that each b-value has a chance to pop a few times
 
-ytrans = [translator(sample[0]), translator(sample[1])]
+y_b0 = translator(sample[0], training=False)
+y_dw = translator(sample[1], training=False)
 
 for epoch in range(initial_epoch, args.epochs):   
     t = time.time()
@@ -182,36 +185,37 @@ for epoch in range(initial_epoch, args.epochs):
     v_loss_epoch = []    
     
     for _ in range(n_train_steps):
+        for substep in range(nb_substeps):
+
+            b0, dw = next(gen_train)
+            b0 = translator(b0, training=False)
+            dw = translator(dw, training=False)
             
-        b0, dw = next(gen_train)
-        b0 = translator(b0)
-        dw = translator(dw)
+            if args.transfo == 'deformable':
+                v_loss = registrator.train_on_batch([b0, dw], [b0, np.zeros((args.batch_size,1))])
+            else:
+                v_loss = registrator.train_on_batch([b0, dw], b0)
+            v_loss_epoch += [v_loss] 
         
-        if args.transfo == 'deformable':
-            v_loss = registrator.train_on_batch([b0, dw], 2*[np.zeros((args.batch_size,1))])
-        else:
-            v_loss = registrator.train_on_batch([b0, dw], np.zeros((args.batch_size,1)))
-        v_loss_epoch += [v_loss] 
-    
-        print('-', end='')
+        print('-' * args.batch_size, end='')
     v_loss_epoch = np.mean(v_loss_epoch, axis=0)
     
     if is_val:
         v_loss_epoch_val = [] 
         for _ in range(n_val_steps):
+            for substep in range(nb_substeps):
 
-            b0, dw = next(gen_val)          
-            b0 = translator(b0)
-            dw = translator(dw)
-           
-            if args.transfo == 'deformable':
-                v_loss_val = registrator.test_on_batch([b0, dw], 2*[np.zeros((args.batch_size,1))])
-            else:
-                v_loss_val = registrator.test_on_batch([b0, dw], np.zeros((args.batch_size,1)))
-            v_loss_epoch_val += [v_loss_val] 
-                
-            print('.', end='')
+                b0, dw = next(gen_val)          
+                b0 = translator(b0, training=False)
+                dw = translator(dw, training=False)
             
+                if args.transfo == 'deformable':
+                    v_loss_val = registrator.test_on_batch([b0, dw], [b0, np.zeros((args.batch_size,1))])
+                else:
+                    v_loss_val = registrator.test_on_batch([b0, dw], b0)
+                v_loss_epoch_val += [v_loss_val] 
+                    
+            print('.' * args.batch_size, end='')           
         v_loss_epoch_val = np.mean(v_loss_epoch_val, axis=0)
  
         
@@ -243,27 +247,36 @@ for epoch in range(initial_epoch, args.epochs):
         registrator.save(args.model + '_best.h5')
     registrator.save(args.model + '_last.h5')
     
-    yhat = registrator.predict(ytrans, verbose=0)
+    y_dw_corr = registrator([y_b0, y_dw], training=False)
     if args.transfo == 'deformable':
-        yhat = yhat[0]
+        y_dw_corr = y_dw_corr
 
-    f, axs = plt.subplots(2,3); f.dpi = 200
+    f, axs = plt.subplots(2,5); f.dpi = 300
     plt.subplots_adjust(wspace=0.01,hspace=-0.1)
 
-    axs[0][0].imshow(np.fliplr(yhat[0,:,:,sl_sag,0]), vmin=0, vmax=0.5, origin="lower")
-    axs[0][1].imshow(np.fliplr(yhat[0,:,:,sl_sag,1]), vmin=0, vmax=0.5, origin="lower")
-    axs[0][2].imshow(np.fliplr((yhat[0,:,:,sl_sag,1]-yhat[0,:,:,sl_sag,0]))**2, vmin=0, vmax=0.005, origin="lower")
-    axs[1][0].imshow(np.fliplr(yhat[0,sl_axi,:,:,0]), vmin=0, vmax=0.5, origin="lower")
-    axs[1][1].imshow(np.fliplr(yhat[0,sl_axi,:,:,1]), vmin=0, vmax=0.5, origin="lower")
-    axs[1][2].imshow(np.fliplr((yhat[0,sl_axi,:,:,1]-yhat[0,sl_axi,:,:,0]))**2, vmin=0, vmax=0.005, origin="lower")
-    axs[0][0].axis('off'); axs[0][1].axis('off');  axs[1][0].axis('off'); axs[1][1].axis('off'); axs[0][2].axis('off'); axs[1][2].axis('off'); 
-    axs[0][0].set_title('trans b=0 (ref)')
-    axs[0][1].set_title('trans dw (mov)')
-    axs[0][2].set_title('sq diff')
+    axs[0][0].imshow(np.fliplr((y_dw[0,:,:,sl_sag,0]-y_b0[0,:,:,sl_sag,0]))**2, vmin=0, vmax=0.005, origin="lower")
+    axs[0][1].imshow(np.fliplr(y_dw[0,:,:,sl_sag,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[0][2].imshow(np.fliplr(y_b0[0,:,:,sl_sag,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[0][3].imshow(np.fliplr(y_dw_corr[0,:,:,sl_sag,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[0][4].imshow(np.fliplr((y_dw_corr[0,:,:,sl_sag,0]-y_b0[0,:,:,sl_sag,0]))**2, vmin=0, vmax=0.005, origin="lower")
+    
+    axs[1][0].imshow(np.fliplr((y_dw[0,sl_axi,:,:,0]-y_b0[0,sl_axi,:,:,0]))**2, vmin=0, vmax=0.005, origin="lower")
+    axs[1][1].imshow(np.fliplr(y_dw[0,sl_axi,:,:,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[1][2].imshow(np.fliplr(y_b0[0,sl_axi,:,:,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[1][3].imshow(np.fliplr(y_dw_corr[0,sl_axi,:,:,0]), vmin=0, vmax=0.5, origin="lower")
+    axs[1][4].imshow(np.fliplr((y_dw_corr[0,sl_axi,:,:,0]-y_b0[0,sl_axi,:,:,0]))**2, vmin=0, vmax=0.005, origin="lower")
 
+    axs[0][0].set_title('sq diff', fontsize=7)
+    axs[0][1].set_title('trans dw', fontsize=7)
+    axs[0][2].set_title('trans b=0 (ref)', fontsize=7)
+    axs[0][3].set_title('trans dw corr', fontsize=7)
+    axs[0][4].set_title('sq diff corr', fontsize=7)
+    
+    for i in range(2): 
+        for j in range(5): axs[i][j].axis('off')
     plt.suptitle('epoch: ' + str(epoch+1), ha='center', y=0.89, fontsize=8)
-
-    plt.savefig(os.path.join(args.model + '_imgs','img_' + str(epoch) + '.png'), bbox_inches='tight')        
+    plt.tight_layout()
+    plt.savefig(os.path.join(args.model + '_imgs','img_' + str(epoch) + '.png'), bbox_inches='tight', dpi=300)        
     plt.close()
 
 eddeep.utils.plot_losses(loss_file, is_val=is_val)

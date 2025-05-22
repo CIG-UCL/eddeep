@@ -83,9 +83,9 @@ class pix2pix_gen(ne.modelio.LoadableModel):
 
 def gan(generator, discriminator, image_shape):
 
-    for layer in discriminator.layers:
-        if not isinstance(layer, KL.BatchNormalization):
-            layer.trainable = False
+    # for layer in discriminator.layers:
+    #     if not isinstance(layer, KL.BatchNormalization):
+    #         layer.trainable = False
 
     in_src = KL.Input(shape=(*image_shape, 1))
     gen_out = generator(in_src)
@@ -109,23 +109,17 @@ class eddy_reg(ne.modelio.LoadableModel):
                  name='eddy_reg'):
         
         ndims = len(volshape)
+        center = tf.constant(volshape, dtype=tf.float32) / 2
         Conv = getattr(KL, 'Conv%dD' % ndims)
         
         trans_init = KI.RandomNormal(stddev=1e-2)
         lin_init = KI.RandomNormal(stddev=1e-3)  
         quad_init = KI.RandomNormal(stddev=1e-5) 
             
-        b0 = KL.Input(shape=(*volshape, 1))
-        dw = KL.Input(shape=(*volshape, 1)) 
+        b0 = KL.Input(shape=(*volshape, 1), name='input_b0')
+        dw = KL.Input(shape=(*volshape, 1), name='input_dw') 
         
-        if transfo == 'deformable':
-            newshape = [int(np.ceil(volshape[d] / 2**len(nb_enc_features)) * 2**len(nb_enc_features)) for d in range(ndims)]
-            lowerPad = [0] + [int(np.round((newshape[d] - volshape[d]) / 2)) for d in range(ndims)] + [0]
-            upperPad = [0] + [int(newshape[d] - volshape[d] - lowerPad[d+1]) for d in range(ndims)] + [0]
-            pads = tf.stack((lowerPad, upperPad), axis=1)
-            input_model = tf.keras.Model(inputs=[b0, dw], outputs=[tf.pad(b0, pads), tf.pad(dw, pads)])
-        else:
-            input_model = tf.keras.Model(inputs=[b0, dw], outputs=[b0, dw])
+        input_model = tf.keras.Model(inputs=[b0, dw], outputs=[b0, dw])
         
         if transfo in ('linear', 'quadratic'):
             
@@ -134,7 +128,12 @@ class eddy_reg(ne.modelio.LoadableModel):
                                   name='eddy_model')
             
             transfo_params = KL.Flatten()(eddy_model.output)    
-                        
+            
+            ###############################################
+            for j, nf in enumerate(nb_dense_features):
+                transfo_params = KL.Dense(nf, activation='relu', name='trans_eddy_%d' % j)(transfo_params)
+            ###############################################
+            
             trans_eddy = transfo_params
             lin_eddy = transfo_params
             if transfo == 'quadratic':
@@ -142,23 +141,23 @@ class eddy_reg(ne.modelio.LoadableModel):
             trans_rig = transfo_params
             lin_rig = transfo_params
             
-            for j, nf in enumerate(nb_dense_features):
-                trans_eddy = KL.Dense(nf, activation='relu', name='trans_eddy_%d' % j)(trans_eddy)
-                lin_eddy = KL.Dense(nf, activation='relu', name='lin_eddy_%d' % j)(lin_eddy)
-                if transfo == 'quadratic':
-                    quad_eddy = KL.Dense(nf, activation='relu', name='quad_eddy_%d' % j)(quad_eddy)
-                trans_rig = KL.Dense(nf, activation='relu', name='trans_rig_%d' % j)(trans_rig)
-                lin_rig = KL.Dense(nf, activation='relu', name='lin_rig_%d' % j)(lin_rig) 
+            # for j, nf in enumerate(nb_dense_features):
+            #     trans_eddy = KL.Dense(nf, activation='relu', name='trans_eddy_%d' % j)(trans_eddy)
+            #     lin_eddy = KL.Dense(nf, activation='relu', name='lin_eddy_%d' % j)(lin_eddy)
+            #     if transfo == 'quadratic':
+            #         quad_eddy = KL.Dense(nf, activation='relu', name='quad_eddy_%d' % j)(quad_eddy)
+            #     trans_rig = KL.Dense(nf, activation='relu', name='trans_rig_%d' % j)(trans_rig)
+            #     lin_rig = KL.Dense(nf, activation='relu', name='lin_rig_%d' % j)(lin_rig) 
         
             trans_eddy = KL.Dense(1, kernel_initializer=trans_init, name='trans_eddy')(trans_eddy)
             lin_eddy  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_eddy')(lin_eddy)
             
-            transfo_eddy = layers.AffCoeffToMatrix(ndims=ndims,dire=ped,transfo_type='dir_affine', name='build_eddy_affine_transfo')([trans_eddy,lin_eddy])
+            transfo_eddy = layers.AffCoeffToMatrix(ndims=ndims, dire=ped, transfo_type='dir_affine', center=center, name='build_eddy_affine_transfo')([trans_eddy,lin_eddy])
             transfo_eddy = voxelmorph.layers.AffineToDenseShift(shape=volshape, shift_center=False)(transfo_eddy)
             if transfo == 'quadratic':
-                quad_eddy = KL.Dense(ndims*(ndims+1)/2, kernel_initializer=quad_init, name='quad_eddy')(quad_eddy)
+                quad_eddy = KL.Dense(ndims*(ndims+1)//2, kernel_initializer=quad_init, name='quad_eddy')(quad_eddy)
                 transfo_quad_eddy = layers.QuadCoeffToMatrix(ndims=ndims, name='build_quad_transfo')(quad_eddy)
-                transfo_quad_eddy = layers.QuadUnidirToDenseShift(shape=volshape, dire=ped, shift_center=False)(transfo_quad_eddy)
+                transfo_quad_eddy = layers.QuadUnidirToDenseShift(shape=volshape, dire=ped, center=center)(transfo_quad_eddy)
                 transfo_eddy = KL.add((transfo_eddy, transfo_quad_eddy))
                 
         elif transfo == 'deformable':
@@ -166,8 +165,7 @@ class eddy_reg(ne.modelio.LoadableModel):
             eddy_model = voxelmorph.networks.Unet(input_model=input_model,
                                                   nb_features=[nb_enc_features, nb_dec_features],
                                                   name='eddy_model')
-            transfo_eddy = layers.unpad(eddy_model.output, pads)
-            transfo_eddy = Conv(1, kernel_size=3, padding='same', kernel_initializer=KI.RandomNormal(mean=0.0, stddev=1e-5), name='%s_field' % name)(transfo_eddy)
+            transfo_eddy = Conv(1, kernel_size=3, padding='same', kernel_initializer=KI.RandomNormal(mean=0.0, stddev=1e-5), name='%s_field' % name)(eddy_model.output)
             transfo_eddy_list = []  
             for i in range(0, ndims):
                 if i == ped:
@@ -187,15 +185,15 @@ class eddy_reg(ne.modelio.LoadableModel):
                 
         trans_rig = KL.Dense(ndims, kernel_initializer=trans_init, name='trans_rig')(trans_rig)
         lin_rig  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_rig')(lin_rig)    
-        transfo_rig = layers.AffCoeffToMatrix(ndims=ndims,transfo_type='rigid', name='build_rigid_transfo')([trans_rig,lin_rig])
+        transfo_rig = layers.AffCoeffToMatrix(ndims=ndims, transfo_type='rigid', center=center, name='build_rigid_transfo')([trans_rig,lin_rig])
 
         full_transfo = voxelmorph.layers.ComposeTransform(shift_center=False, name='compose_transfos')([transfo_eddy, transfo_rig])
 
-        dw_mov = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij', name='full_transformer')([dw, full_transfo])
-        if jacob_mod:        
-            dw_mov = layers.JacobianMultiplyIntensities(indexing='ij', outDet=True, is_shift=True, name='jac_modul_dw')([dw_mov, full_transfo])
+        dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij', name='full_transformer')([dw, full_transfo])
+        if jacob_mod:
+            dw_corr = layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True, name='jac_modul_dw')([dw_corr, full_transfo])
         
-        outputs = [tf.concat((b0, dw_mov), axis=-1)]
+        outputs = [dw_corr]
         if transfo == 'deformable':
             outputs += [transfo_eddy]
         
@@ -204,27 +202,45 @@ class eddy_reg(ne.modelio.LoadableModel):
         # cache pointers to layers and tensors for future reference
         self.references = ne.modelio.LoadableModel.ReferenceContainer()
         self.references.full_transfo = full_transfo
-        self.references.dw_mov = dw_mov
+        self.references.dw_corr = dw_corr
         self.references.jacob_mod = jacob_mod
         
         
-    def get_registration_model(self):
-        """
-        Returns a reconfigured model to predict only the final transform.
-        """
-        return tf.keras.Model(self.inputs, [self.references.dw_mov,self.references.full_transfo])
+        
+    # def get_registration_model(self):
+    #     """
+    #     Returns a reconfigured model to predict only the final transform.
+    #     """
+    #     return tf.keras.Model(self.inputs, [self.references.dw_corr,self.references.full_transfo])
     
-    def apply_corr(self, in_b0, in_dw, dw, get_transfo=False):
+    # def apply_corr(self, in_b0, in_dw, dw, get_transfo=False):
 
-        warp_model = self.get_registration_model()
-        dw_input = tf.keras.Input(shape=dw.shape[1:])
-        dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij')([dw_input, warp_model.output[1]])
+    #     warp_model = self.get_registration_model()
+    #     dw_input = tf.keras.Input(shape=dw.shape[1:])
+    #     dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij')([dw_input, warp_model.output[1]])
+    #     if self.references.jacob_mod:
+    #         dw_corr = layers.JacobianMultiplyIntensities(indexing='ij')([dw_corr, warp_model.output[1]])
+    #     outputs = [dw_corr, warp_model.output[0]]
+    #     if get_transfo:
+    #         outputs += [warp_model.output[1]]
+    #     return tf.keras.Model(warp_model.inputs + [dw_input], outputs)([in_b0, in_dw, dw])
+    
+
+    def apply_corr(self, b0_trans, dw_trans, dw, get_transfo=False):
+        
+        volshape = dw.shape[1:-1]
+        dw = tf.cast(dw, tf.float32)
+        warp_model = tf.keras.Model(inputs=self.inputs, outputs=self.references.full_transfo)
+        
+        dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij')([dw, warp_model.output])
         if self.references.jacob_mod:
-            dw_corr = layers.JacobianMultiplyIntensities(indexing='ij')([dw_corr, warp_model.output[1]])
-        outputs = [dw_corr, warp_model.output[0]]
+            dw_corr = layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True)([dw_corr, warp_model.output])
+        outputs = [dw_corr]
         if get_transfo:
-            outputs += [warp_model.output[1]]
-        return tf.keras.Model(warp_model.inputs + [dw_input], outputs).predict([in_b0, in_dw, dw], verbose=0)
+            outputs += [warp_model.output]
+            
+        dw_input = tf.keras.Input(shape=(*volshape, 1))
+        return tf.keras.Model(warp_model.inputs + [dw_input], outputs)([b0_trans, dw_trans, dw], training=False)
     
 
 class encoder(tf.keras.Model): # Similar code to voxelmorph's Unet but truncated to only keep the encoder part.
@@ -299,6 +315,9 @@ class encoder(tf.keras.Model): # Similar code to voxelmorph's Unet but truncated
 
             # temporarily use maxpool since downsampling doesn't exist in keras
             last = MaxPooling(max_pool[level], name='%s_enc_pooling_%d' % (name, level))(last)
-
+        layer_name = '%s_enc_conv_final' % (name)
+        last = voxelmorph.networks._conv_block(last, nf, name=layer_name,
+                                               kernel_initializer=kernel_initializer)
+        
         super().__init__(inputs=model_inputs, outputs=last, name=name)
    
