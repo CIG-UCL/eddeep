@@ -84,6 +84,19 @@ python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
                                                   -e 200 -as 0.5 -ai 0.5
 ```
 
+### Applying the correction
+```bash
+dw=<path-to-dw-4D-data>
+dw_corr=<path-to-corrected-dw-4D-data>
+bval=<path-to-bval-file>
+
+python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
+                                                 -o ${dw_corr}\
+                                                 -tr ${out_dir}/trans_gen_best.h5\
+                                                 -reg ${out_dir}/corr_best.h5\
+                                                 -b ${bval}
+```
+
 ## References
 
 If you used **Eddeep** for your work, please cite the following:
