@@ -68,7 +68,7 @@ data_precorr_val_dir=<path-to-precorrected-validation-data-dir>
 python ${eddeep_dir}/scripts/train_eddeep_trans.py -t ${data_precorr_train_dir}\
                                                    -v ${data_precorr_val_dir}\
                                                    -o ${out_dir}/trans\
-                                                   -B ${bvaltarget} -e 1000 -as 0.5 -ai 0.5
+                                                   -B ${bvaltarget} -e 400 -as 0.5 -ai 0.5
 ```
 
 ### Training the registrator
@@ -78,10 +78,10 @@ data_val_dir=<path-to-validation-data-dir>
 
 python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
                                                   -v ${data_val_dir}\
-                                                  -tr ${out_dir}/trans_gen_best.h5\
+                                                  -tr ${out_dir}/trans_gen_best.keras\
                                                   -o ${out_dir}/corr\
                                                   -p 1\
-                                                  -e 200 -as 0.5 -ai 0.5
+                                                  -e 200 -as 0.5
 ```
 
 ### Applying the correction
@@ -92,8 +92,8 @@ bval=<path-to-bval-file>
 
 python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -o ${dw_corr}\
-                                                 -tr ${out_dir}/trans_gen_best.h5\
-                                                 -reg ${out_dir}/corr_best.h5\
+                                                 -tr ${out_dir}/trans_gen_best.keras\
+                                                 -reg ${out_dir}/corr_best.keras\
                                                  -b ${bval}
 ```
 
