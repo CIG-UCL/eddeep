@@ -107,7 +107,7 @@ If you used **Eddeep** for your work, please cite the following:
 
 The code uses bits from Neurite and Voxelmorph:
 
-&nbsp;[2] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)
+&nbsp;[2] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)\
 &nbsp;[3] **Neurite** [[github]](https://github.com/adalca/neurite)
 
 
