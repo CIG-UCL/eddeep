@@ -1,11 +1,10 @@
 import numpy as np
 import os
 import glob
-# import pickle
-import SimpleITK as sitk        
+import SimpleITK as sitk       
+ 
 import eddeep.utils
 import eddeep.augmentation
-# from dmipy.core import acquisition_scheme
 
 
 def nb_vols_per_bval(sub, ped):
@@ -19,6 +18,7 @@ def nb_vols_per_bval(sub, ped):
 
     return nb_vols, list_bval
 
+
 def eddeep_fromDWI(subdirs,
                    k = 4,
                    ped = None,
@@ -29,7 +29,7 @@ def eddeep_fromDWI(subdirs,
                    sl_axi = None,
                    get_dwmean = False,
                    spat_aug_prob=0,
-                   int_pair_aug_prob=0,
+                   int_aug_prob=0,
                    aug_dire = None,
                    prob_bval=True,
                    batch_size=1):
@@ -60,7 +60,7 @@ def eddeep_fromDWI(subdirs,
                 nb_vols, list_bval = nb_vols_per_bval(sub_i, ped_i)
                 if prob_bval:
                     list_bval = np.repeat(list_bval, nb_vols).tolist()
-                ind_bval = np.random.choice(range(1, len(list_bval)))
+                ind_bval = np.random.choice(range(len(list_bval)))
                 bval_i = list_bval[ind_bval]
             else: 
                 bval_i = 'b' + str(bval)
@@ -85,10 +85,21 @@ def eddeep_fromDWI(subdirs,
                 dw_file_i = dw_file
                 
             b0 = sitk.ReadImage(os.path.join(sub_i, ped_i, 'b0', b0_file_i))
+            b0 = sitk.Cast(b0, sitk.sitkFloat32)
+            b0 = sitk.Clamp(b0, lowerBound=0.0)
+            b0 = eddeep.utils.pad_image(b0, k=k)
+            
             dw = sitk.ReadImage(os.path.join(sub_i, ped_i, bval_i, dw_file_i))
+            dw = sitk.Cast(dw, sitk.sitkFloat32)
+            dw = sitk.Clamp(dw, lowerBound=0.0)
+            dw = eddeep.utils.pad_image(dw, k=k)
+            
             if get_dwmean:
                 dw_mean = sitk.ReadImage(glob.glob(os.path.join(sub_i, ped_i,'*_b' + str(target_bval) + '_mean.nii.gz'))[0])
-            
+                dw_mean = sitk.Cast(dw_mean, sitk.sitkFloat32)
+                dw_mean = sitk.Clamp(dw_mean, lowerBound=0.0)
+                dw_mean = eddeep.utils.pad_image(dw_mean, k=k)
+                
             if np.random.rand() < spat_aug_prob:
                 if aug_dire is not None:
                     aug = eddeep.augmentation.spatial_aug_dir(b0, dire=aug_dire)
@@ -102,36 +113,29 @@ def eddeep_fromDWI(subdirs,
                 else:
                     b0, dw = aug.transform([b0, dw])
                     
-            if np.random.rand() < int_pair_aug_prob:
-                stat_filter = sitk.StatisticsImageFilter()
+            if np.random.rand() < int_aug_prob:
                 
-                stat_filter.Execute(b0)
-                b0_mu = stat_filter.GetMean()
-                b0_std = stat_filter.GetSigma()
-                b0 = (b0-b0_mu) / b0_std
+                b0, dw = eddeep.augmentation.interp_dw(b0, dw)
                 
-                stat_filter.Execute(dw)
-                dw_mu = stat_filter.GetMean()
-                dw_std = stat_filter.GetSigma()
-                dw = (dw-dw_mu) / dw_std
+                aug_int = eddeep.augmentation.intensity_aug(b0)
+                aug_int.set_bias_field_params()
+                aug_int.set_noise_params()
+                b0 = aug_int.transform([b0])[0]
                 
-                alpha = float(np.exp(np.random.normal(0,0.5)))
-                b0 = alpha*b0 + (1-alpha)*dw
-                beta = float(np.exp(np.random.normal(0,0.5)))
-                dw = beta*dw + (1-beta)*b0
+                aug_int = eddeep.augmentation.intensity_aug(dw)
+                aug_int.set_bias_field_params()
+                aug_int.set_noise_params()
+                dw = aug_int.transform([dw])[0]
                 
-            b0 = eddeep.utils.normalize_intensities(b0, dtype=sitk.sitkFloat32)
-            b0 = eddeep.utils.pad_image(b0, k=k)
             b0 = sitk.GetArrayFromImage(b0)[np.newaxis,..., np.newaxis]
+            b0 = eddeep.utils.normalize_intensities_q(b0, 0.999)
                         
-            dw = eddeep.utils.normalize_intensities(dw, dtype=sitk.sitkFloat32)
-            dw = eddeep.utils.pad_image(dw, k=k)
             dw = sitk.GetArrayFromImage(dw)[np.newaxis,..., np.newaxis]
+            dw = eddeep.utils.normalize_intensities_q(dw, 0.999)
             
-            if get_dwmean:
-                dw_mean = eddeep.utils.normalize_intensities(dw_mean, dtype=sitk.sitkFloat32)
-                dw_mean = eddeep.utils.pad_image(dw_mean, k=k)
+            if get_dwmean:                
                 dw_mean = sitk.GetArrayFromImage(dw_mean)[np.newaxis,..., np.newaxis]
+                dw_mean = eddeep.utils.normalize_intensities_q(dw_mean, 0.999)
             
             if sl_axi is not None:
                 b0 = b0[:,sl_axi,:,:,:]
@@ -149,134 +153,36 @@ def eddeep_fromDWI(subdirs,
             yield [np.concatenate(b0s,axis=0), np.concatenate(dws,axis=0)]
         
 
-# def eddeep_fromModel(subdirs,
-#                      target_bval,
-#                      k = 4,
-#                      ped = None,
-#                      geom_img = None,
-#                      bval_range = [0,5000],
-#                      dw_file = None,
-#                      b0_file = None,
-#                      sl_axi = None,
-#                      get_dwmean = False,
-#                      spat_aug_prob=0,
-#                      int_aug_prob=0,
-#                      aug_dire = None,
-#                      batch_size=1):
-#     # sub
-#     #   |_ PED
-#     #        |_ model_fit.pkl
-#     #        |_ dw_mean.nii.gz
+
+def eddeep_fromDWI_test(dw_file,
+                        out_size,
+                        dwmean_file = None):
+
+    dws_img = sitk.ReadImage(dw_file)
+    n_vol = dws_img.GetSize()[-1]
+
+    dws = []
+    for b in range(n_vol):
+
+        dw = sitk.Cast(dws_img[:,:,:,b], sitk.sitkFloat32)
+        dw = sitk.Clamp(dw, lowerBound=0.0)
+        dw = eddeep.utils.pad_image(dw, out_size=out_size)
+        dw = sitk.GetArrayFromImage(dw)[np.newaxis,..., np.newaxis]
+        dw = eddeep.utils.normalize_intensities_q(dw, 0.999)
+        dws += [dw]
+        
+    dws = np.concatenate(dws, axis=0)
     
-#     if geom_img is not None:
-#         geom_img = sitk.ReadImage(geom_img)
-        
-#     while True:
-#         b0s = []
-#         dws = []
-#         dws_mean = []
-        
-#         for b in range(batch_size):
-#             do_int_aug = np.random.rand() < int_aug_prob
-#             do_spat_aug = np.random.rand() < spat_aug_prob
-            
-#             # random subject
-#             i = np.random.choice(range(0, len(subdirs)))
-#             sub_i = subdirs[i]
-            
-#             # random PED
-#             if ped is None:
-#                 list_ped = sorted(next(os.walk(sub_i))[1])
-#                 ind_ped = np.random.choice(range(0, len(list_ped)))
-#                 ped_i = list_ped[ind_ped]
-#             else:
-#                 ped_i = ped
-            
-#             # load fitted model
-#             list_fitted = sorted(glob.glob(os.path.join(sub_i, ped_i, '*.pkl')))
-#             with open(list_fitted[0], 'rb') as pickle_file:
-#                 fitted_model = pickle.load(pickle_file)
-            
-#             # random bval
-#             bval = (bval_range[1]-bval_range[0])*np.random.rand() + bval_range[0]
-#             bval = np.reshape(bval, 1)
-            
-#             # random bvec
-#             theta = 2*np.pi*np.random.rand()
-#             phi = np.arccos(2*np.random.rand()-1)
-#             bvec = [np.sin(theta) * np.cos(phi),
-#                     np.sin(theta) * np.sin(phi),
-#                     np.cos(theta)               ]
-#             bvec = np.reshape(bvec, (1,3))
-            
-#             scheme_dw = acquisition_scheme.acquisition_scheme_from_bvalues(bval * 1e6, bvec) 
+    if dwmean_file is not None:
+        dw_mean = sitk.ReadImage(dwmean_file)
+        dw_mean = sitk.Cast(dw_mean, sitk.sitkFloat32)
+        dw_mean = sitk.Clamp(dw_mean, lowerBound=0.0)
+        dw_mean = eddeep.utils.pad_image(dw_mean, out_size=out_size)
+        dw_mean = sitk.GetArrayFromImage(dw_mean)[np.newaxis,..., np.newaxis]
+        dw_mean = eddeep.utils.normalize_intensities_q(dw_mean, 0.999)
 
-#             b0 = fitted_model.S0
-#             b0 = sitk.GetImageFromArray(b0)
-#             if do_int_aug:     
-#                 if geom_img is not None:
-#                     b0.CopyInformation(geom_img)
-#                 aug_int = eddeep.augmentation.intensity_aug(n_cpts=20)
-#                 b0 = aug_int.transform(b0)          
-#             fitted_model.S0 = sitk.GetArrayFromImage(b0)
-            
-#             dw = fitted_model.predict(scheme_dw)[...,0]
-#             dw = sitk.GetImageFromArray(dw)
-#             if geom_img is not None:
-#                 dw.CopyInformation(geom_img)
-                
-#             if get_dwmean:
-#                 dw_mean = sitk.ReadImage(glob.glob(os.path.join(sub_i, ped_i,'*_b' + str(target_bval) + '_mean.nii.gz'))[0])
-#                 if geom_img is not None:
-#                     dw_mean.CopyInformation(geom_img)
-#                 else:
-#                     dw_mean = sitk.GetImageFromArray(sitk.GetArrayFromImage(dw_mean))
-                    
-#             if do_spat_aug:
-#                 if aug_dire is not None:
-#                     aug_spat = eddeep.augmentation.spatial_aug_dir(b0, dire=aug_dire)
-#                 else:
-#                     aug_spat = eddeep.augmentation.spatial_aug(b0)
-#                 aug_spat.set_aff_params()
-#                 aug_spat.set_diffeo_params()  
-#                 aug_spat.gen_transfo()
-#                 if get_dwmean:
-#                     b0, dw, dw_mean = aug_spat.transform([b0, dw, dw_mean])
-#                 else:
-#                     b0, dw = aug_spat.transform([b0, dw])            
-            
-#             if do_int_aug:     
-#                 aug_int = eddeep.augmentation.intensity_aug(n_cpts=0, distrib_noise='rician')
-#                 b0 = aug_int.transform(b0)
-#                 dw = aug_int.transform(dw)
-                
-                
-#             b0 = eddeep.utils.normalize_intensities(b0, dtype=sitk.sitkFloat32)
-#             if k is not None: b0 = eddeep.utils.pad_image(b0, k=k)  
-#             b0 = sitk.GetArrayFromImage(b0)[np.newaxis,..., np.newaxis]
-                        
-#             dw = eddeep.utils.normalize_intensities(dw, dtype=sitk.sitkFloat32)
-#             if k is not None: dw = eddeep.utils.pad_image(dw, k=k)
-#             dw = sitk.GetArrayFromImage(dw)[np.newaxis,..., np.newaxis]
-            
-#             if get_dwmean:
-#                 dw_mean = eddeep.utils.normalize_intensities(dw_mean, dtype=sitk.sitkFloat32)
-#                 if k is not None: dw_mean = eddeep.utils.pad_image(dw_mean, k=k)
-#                 dw_mean = sitk.GetArrayFromImage(dw_mean)[np.newaxis,..., np.newaxis]
-            
-#             if sl_axi is not None:
-#                 b0 = b0[:,sl_axi,:,:,:]
-#                 dw = dw[:,sl_axi,:,:,:]
-#                 dw_mean = dw_mean[:,sl_axi,:,:,:]
-                
-#             b0s += [b0]
-#             dws += [dw]
-#             if get_dwmean:
-#                 dws_mean += [dw_mean]
-        
-#         if get_dwmean:
-#             yield [np.concatenate(b0s,axis=0), np.concatenate(dws,axis=0), np.concatenate(dws_mean,axis=0)]
-#         else:
-#             yield [np.concatenate(b0s,axis=0), np.concatenate(dws,axis=0)]
-        
-
+        return dws, dw_mean
+    
+    else:
+        return dws
+    

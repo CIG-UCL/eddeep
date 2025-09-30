@@ -1,323 +1,206 @@
-# third party imports
-import numpy as np
 import tensorflow as tf
 import tensorflow.keras.layers as KL
 import tensorflow.keras.initializers as KI
 
-import voxelmorph   
-# This code uses Voxelmorph pieces directly or contains pieces inspired by Voxelmorph.
-# If you use it, please cite them appropriately too. See https://github.com/voxelmorph/voxelmorph       
-import neurite as ne
-
-# local imports
-import os
-import sys
-maindir = os.path.dirname(os.path.dirname(os.path.abspath(sys.argv[0])))
-sys.path.append(maindir)
-import eddeep.layers as layers
+from eddeep import layers
+from external import voxelmorph
 
 
+def get_conv(ndims):
+    if ndims == 3: return KL.Conv3D
+    elif ndims == 2: return KL.Conv2D
 
-class pix2pix_dis(ne.modelio.LoadableModel): 
-    """patchGAN discriminator"""
+def get_upsample(ndims):
+    if ndims == 3: return KL.UpSampling3D
+    elif ndims == 2: return KL.UpSampling2D
+
+def get_maxpool(ndims):
+    if ndims == 3: return KL.MaxPool3D
+    elif ndims == 2: return KL.MaxPool2D
     
-    @ne.modelio.store_config_args
-    def __init__(self,
-                 volshape,
-                 nb_feats=[64,128,256,512],
-                 dropout=None, 
-                 name='patchGAN_dis'):
-        """
-        """
-        
-        x = KL.Input(shape=(*volshape, 1))
-        y = KL.Input(shape=(*volshape, 1))
-        inputs = KL.concatenate((x, y))
- 
-        ndims = len(volshape)
-        
-        use_bias = False 
-        kw = 4
-        padw = 'same'
-        strides = [2]*ndims
-        Conv = getattr(KL, 'Conv%dD' % ndims)
-        
-        last = Conv(nb_feats[0], kernel_size=kw, strides=strides, padding=padw)(inputs)
-        last = KL.LeakyReLU(0.2)(last)
-        for n in range(1, len(nb_feats)-1): 
-            last = Conv(nb_feats[n], kernel_size=kw, strides=strides, padding=padw, use_bias=use_bias)(last)
-            last = KL.BatchNormalization()(last)
-            if dropout is not None:
-                last = KL.Dropout(dropout)(last)
-            last = KL.LeakyReLU(0.2)(last)
-        
-        last = Conv(nb_feats[-1], kernel_size=kw, strides=[1]*ndims, padding=padw, use_bias=use_bias)(last)
-        last = KL.BatchNormalization()(last)
-        last = KL.LeakyReLU(0.2)(last)
-        
-        last = Conv(1, kernel_size=kw, strides=[1]*ndims, padding=padw)(last)
-        last = tf.keras.activations.sigmoid(last)
-        
-        super().__init__(inputs=[x, y], outputs=last, name=name)  
 
-
-class pix2pix_gen(ne.modelio.LoadableModel):
-    """
-    """
-    @ne.modelio.store_config_args
-    def __init__(self,
-                 volshape,
-                 nb_enc_features=[16,32,64,128],
-                 nb_dec_features=[128,64,32,16,1],
-                 final_activation = None, 
-                 name='pix2pix_gen'):
-        
-        img_in = tf.keras.Input(shape=(*volshape, 1), name='%s_img_input' % name)
-        unet = voxelmorph.networks.Unet(inshape=[*volshape,1],
-                                        nb_features=[nb_enc_features,nb_dec_features],
-                                        final_activation_function=final_activation)
-        img_out = unet(img_in)
-        
-        super().__init__(inputs=img_in, outputs=img_out, name=name)
-
-
-def gan(generator, discriminator, image_shape):
-
-    # for layer in discriminator.layers:
-    #     if not isinstance(layer, KL.BatchNormalization):
-    #         layer.trainable = False
-
-    in_src = KL.Input(shape=(*image_shape, 1))
-    gen_out = generator(in_src)
-    dis_out = discriminator([in_src, gen_out])
-    model = tf.keras.Model(in_src, [dis_out, gen_out])
+def cnn(imshape,
+        nb_in_chan=1,
+        nb_out_chan=1,
+        nb_enc_feats=None,
+        nb_dec_feats=None,
+        nb_bottleneck_feats=None,
+        nb_conv_lvl=1,
+        do_skips=True,
+        down_type='max',    # 'conv' or 'max'
+        final_activation=None,
+        activation='leaky_relu',
+        res_factor=2,
+        ker_size=3,
+        get_bottle=False,
+        name='cnn'):
     
+    if nb_enc_feats is None: nb_enc_feats = [16, 32, 64, 128]
+    if nb_dec_feats is None: nb_dec_feats = [128, 64, 32, 16]
+    if nb_bottleneck_feats is None: nb_bottleneck_feats = []
+       
+    # Define model input
+    x_in = tf.keras.Input(shape=(*imshape, nb_in_chan), name=f'{name}_input')
+    x = x_in
+
+    ndims = len(imshape)
+    conv = get_conv(ndims)
+    upsample = get_upsample(ndims)
+    maxpool = get_maxpool(ndims)
+
+    if len(nb_dec_feats) == 0:
+        do_skips = False
+    skips = []
+
+    # encoder
+    for i, f in enumerate(nb_enc_feats):
+        for c in range(nb_conv_lvl):
+            x = conv(filters=f, kernel_size=ker_size, strides=1, padding='same',
+                     activation=activation, name=f'{name}_enc_l{i}_conv{c}')(x)
+        if do_skips:
+            skips.append(x)
+        if down_type == 'conv':
+            x = conv(filters=f, kernel_size=ker_size, strides=res_factor, padding='same',
+                     activation=activation, name=f'{name}_enc_l{i}_down')(x)
+        elif down_type == 'max':
+            x = maxpool(res_factor, name=f'{name}_enc_l{i}_down')(x)
+
+    # bottleneck
+    for i, f in enumerate(nb_bottleneck_feats):
+        for c in range(nb_conv_lvl):
+            x = conv(filters=f, kernel_size=ker_size, strides=1, padding='same',
+                     activation=activation, name=f'{name}_bottleneck_l{i}_conv{c}')(x)
+    if get_bottle:
+        x_bottle = x
+
+    # decoder
+    skips.reverse()
+    for i, f in enumerate(nb_dec_feats):
+        for c in range(nb_conv_lvl):
+            x = conv(filters=f, kernel_size=ker_size, strides=1, padding='same',
+                     activation=activation, name=f'{name}_dec_l{i}_conv{c}')(x)
+        if i < len(nb_enc_feats):
+            x = upsample(res_factor, name=f'{name}_enc_l{i}_up')(x)
+            if do_skips:
+                x = KL.Concatenate(axis=-1, name=f'{name}_dec_concat_l{i}')([x, skips[i]])
+
+    # final
+    x = conv(filters=nb_out_chan, kernel_size=ker_size, strides=1, padding='same',
+             activation=final_activation, name=f'{name}_last_conv')(x)
+
+    if get_bottle:
+        model = tf.keras.Model(inputs=x_in, outputs=[x, x_bottle], name=name)
+    else:
+        model = tf.keras.Model(inputs=x_in, outputs=x, name=name)
+
     return model
 
 
-class eddy_reg(ne.modelio.LoadableModel): 
+
+def eddy_reg(imshape,
+             ped,
+             nb_enc_feats=None,
+             nb_dec_feats=None,        # only used if transfo is 'deformable'
+             transfo='quadratic',      # 'linear', 'quadratic' or 'deformable'
+             nb_conv_lvl=1,
+             down_type='max',
+             jacob_mod=False,
+             nb_dense_feats=None,
+             activation='leaky_relu',
+             name='eddy_reg'):
     
-    @ne.modelio.store_config_args
-    def __init__(self,
-                 volshape,
-                 ped,
-                 nb_enc_features=[16, 32, 32, 32, 32],
-                 nb_dec_features=[32, 32, 32, 32, 32, 16, 16],  # only used if transfo is 'deformable'
-                 transfo='linear',                              # 'linear', 'quadratic' or 'deformable'
-                 jacob_mod = True,
-                 nb_dense_features=[64],
-                 name='eddy_reg'):
-        
-        ndims = len(volshape)
-        center = tf.constant(volshape, dtype=tf.float32) / 2
-        Conv = getattr(KL, 'Conv%dD' % ndims)
-        
-        trans_init = KI.RandomNormal(stddev=1e-2)
-        lin_init = KI.RandomNormal(stddev=1e-3)  
-        quad_init = KI.RandomNormal(stddev=1e-5) 
-            
-        b0 = KL.Input(shape=(*volshape, 1), name='input_b0')
-        dw = KL.Input(shape=(*volshape, 1), name='input_dw') 
-        
-        input_model = tf.keras.Model(inputs=[b0, dw], outputs=[b0, dw])
-        
-        if transfo in ('linear', 'quadratic'):
-            
-            eddy_model = encoder(input_model=input_model,
-                                  nb_features=nb_enc_features,
-                                  name='eddy_model')
-            
-            transfo_params = KL.Flatten()(eddy_model.output)    
-            
-            ###############################################
-            for j, nf in enumerate(nb_dense_features):
-                transfo_params = KL.Dense(nf, activation='relu', name='trans_eddy_%d' % j)(transfo_params)
-            ###############################################
-            
-            trans_eddy = transfo_params
-            lin_eddy = transfo_params
-            if transfo == 'quadratic':
-                quad_eddy = transfo_params
-            trans_rig = transfo_params
-            lin_rig = transfo_params
-            
-            # for j, nf in enumerate(nb_dense_features):
-            #     trans_eddy = KL.Dense(nf, activation='relu', name='trans_eddy_%d' % j)(trans_eddy)
-            #     lin_eddy = KL.Dense(nf, activation='relu', name='lin_eddy_%d' % j)(lin_eddy)
-            #     if transfo == 'quadratic':
-            #         quad_eddy = KL.Dense(nf, activation='relu', name='quad_eddy_%d' % j)(quad_eddy)
-            #     trans_rig = KL.Dense(nf, activation='relu', name='trans_rig_%d' % j)(trans_rig)
-            #     lin_rig = KL.Dense(nf, activation='relu', name='lin_rig_%d' % j)(lin_rig) 
-        
-            trans_eddy = KL.Dense(1, kernel_initializer=trans_init, name='trans_eddy')(trans_eddy)
-            lin_eddy  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_eddy')(lin_eddy)
-            
-            transfo_eddy = layers.AffCoeffToMatrix(ndims=ndims, dire=ped, transfo_type='dir_affine', center=center, name='build_eddy_affine_transfo')([trans_eddy,lin_eddy])
-            transfo_eddy = voxelmorph.layers.AffineToDenseShift(shape=volshape, shift_center=False)(transfo_eddy)
-            if transfo == 'quadratic':
-                quad_eddy = KL.Dense(ndims*(ndims+1)//2, kernel_initializer=quad_init, name='quad_eddy')(quad_eddy)
-                transfo_quad_eddy = layers.QuadCoeffToMatrix(ndims=ndims, name='build_quad_transfo')(quad_eddy)
-                transfo_quad_eddy = layers.QuadUnidirToDenseShift(shape=volshape, dire=ped, center=center)(transfo_quad_eddy)
-                transfo_eddy = KL.add((transfo_eddy, transfo_quad_eddy))
-                
-        elif transfo == 'deformable':
-            # eddy part
-            eddy_model = voxelmorph.networks.Unet(input_model=input_model,
-                                                  nb_features=[nb_enc_features, nb_dec_features],
-                                                  name='eddy_model')
-            transfo_eddy = Conv(1, kernel_size=3, padding='same', kernel_initializer=KI.RandomNormal(mean=0.0, stddev=1e-5), name='%s_field' % name)(eddy_model.output)
-            transfo_eddy_list = []  
-            for i in range(0, ndims):
-                if i == ped:
-                    transfo_eddy_list.append(transfo_eddy)
-                else:
-                    transfo_eddy_list.append(tf.keras.backend.zeros_like(transfo_eddy))
-            transfo_eddy = KL.concatenate(transfo_eddy_list)
-
-            # rigid part
-            bottleneckLayer_name = 'eddy_model_dec_conv_%d_0_activation' % (len(nb_enc_features)-1)
-            rigid_params = KL.Flatten()(eddy_model.get_layer(bottleneckLayer_name).output)     
-            trans_rig = rigid_params
-            lin_rig = rigid_params
-            for j, nf in enumerate(nb_dense_features):
-                trans_rig = KL.Dense(nf, activation='relu', name='trans_rig_%d' % j)(trans_rig)
-                lin_rig = KL.Dense(nf, activation='relu', name='lin_rig_%d' % j)(lin_rig) 
-                
-        trans_rig = KL.Dense(ndims, kernel_initializer=trans_init, name='trans_rig')(trans_rig)
-        lin_rig  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_rig')(lin_rig)    
-        transfo_rig = layers.AffCoeffToMatrix(ndims=ndims, transfo_type='rigid', center=center, name='build_rigid_transfo')([trans_rig,lin_rig])
-
-        full_transfo = voxelmorph.layers.ComposeTransform(shift_center=False, name='compose_transfos')([transfo_eddy, transfo_rig])
-
-        dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij', name='full_transformer')([dw, full_transfo])
-        if jacob_mod:
-            dw_corr = layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True, name='jac_modul_dw')([dw_corr, full_transfo])
-        
-        outputs = [dw_corr]
-        if transfo == 'deformable':
-            outputs += [transfo_eddy]
-        
-        super().__init__(inputs=[b0, dw], outputs=outputs, name=name) 
-
-        # cache pointers to layers and tensors for future reference
-        self.references = ne.modelio.LoadableModel.ReferenceContainer()
-        self.references.full_transfo = full_transfo
-        self.references.dw_corr = dw_corr
-        self.references.jacob_mod = jacob_mod
-        
-        
-        
-    # def get_registration_model(self):
-    #     """
-    #     Returns a reconfigured model to predict only the final transform.
-    #     """
-    #     return tf.keras.Model(self.inputs, [self.references.dw_corr,self.references.full_transfo])
+    if nb_enc_feats is None: nb_enc_feats = [16,28,56,75,128]
+    if nb_dec_feats is None: nb_dec_feats = [128,75,56,26,16,16]
+    if nb_dense_feats is None: nb_dense_feats = [128,64]
     
-    # def apply_corr(self, in_b0, in_dw, dw, get_transfo=False):
-
-    #     warp_model = self.get_registration_model()
-    #     dw_input = tf.keras.Input(shape=dw.shape[1:])
-    #     dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij')([dw_input, warp_model.output[1]])
-    #     if self.references.jacob_mod:
-    #         dw_corr = layers.JacobianMultiplyIntensities(indexing='ij')([dw_corr, warp_model.output[1]])
-    #     outputs = [dw_corr, warp_model.output[0]]
-    #     if get_transfo:
-    #         outputs += [warp_model.output[1]]
-    #     return tf.keras.Model(warp_model.inputs + [dw_input], outputs)([in_b0, in_dw, dw])
+    ndims = len(imshape)
+    center = [shape // 2 for shape in imshape]
+    conv = get_conv(ndims)
     
+    trans_init = KI.RandomNormal(stddev=1e-2)
+    lin_init = KI.RandomNormal(stddev=1e-3)  
+    quad_init = KI.RandomNormal(stddev=1e-5) 
+        
+    b0_in = KL.Input(shape=(*imshape, 1), name='input_b0')
+    dw_in = KL.Input(shape=(*imshape, 1), name='input_dw') 
+    b0_dw = KL.Concatenate(axis=-1, name='inputs_concat')([b0_in, dw_in])
+    
+    if transfo in ('linear', 'quadratic'):
+        
+        cnn_model = cnn(imshape=imshape, 
+                        nb_in_chan=2, 
+                        nb_out_chan=nb_enc_feats[-1],
+                        nb_enc_feats=nb_enc_feats, 
+                        nb_dec_feats=[],
+                        nb_conv_lvl=nb_conv_lvl, 
+                        down_type=down_type,
+                        activation=activation,
+                        final_activation=activation, 
+                        name='eddy_cnn')
+        
+        transfo_params = cnn_model(b0_dw)
 
-    def apply_corr(self, b0_trans, dw_trans, dw, get_transfo=False):
+        transfo_params = KL.Flatten()(transfo_params)   
+        for j, nf in enumerate(nb_dense_feats):
+            transfo_params = KL.Dense(nf, activation=activation, name='mlp_eddy_%d' % j)(transfo_params)
         
-        volshape = dw.shape[1:-1]
-        dw = tf.cast(dw, tf.float32)
-        warp_model = tf.keras.Model(inputs=self.inputs, outputs=self.references.full_transfo)
-        
-        dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij')([dw, warp_model.output])
-        if self.references.jacob_mod:
-            dw_corr = layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True)([dw_corr, warp_model.output])
-        outputs = [dw_corr]
-        if get_transfo:
-            outputs += [warp_model.output]
+        trans_eddy = transfo_params
+        lin_eddy = transfo_params            
+        trans_rig = transfo_params
+        lin_rig = transfo_params
+    
+        trans_eddy = KL.Dense(1, kernel_initializer=trans_init, name='trans_eddy',activation=None)(trans_eddy)
+        lin_eddy  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_eddy',activation=None)(lin_eddy)
+        transfo_eddy = layers.AffCoeffToMatrix(ndims=ndims, dire=ped, transfo_type='dir_affine', center=center, name='build_eddy_affine_transfo')([trans_eddy,lin_eddy])
+        transfo_eddy = voxelmorph.layers.AffineToDenseShift(shape=imshape, shift_center=False)(transfo_eddy)
+        if transfo == 'quadratic':
+            quad_eddy = transfo_params
+            quad_eddy = KL.Dense(ndims*(ndims+1)//2, kernel_initializer=quad_init, name='quad_eddy',activation=None)(quad_eddy)
+            transfo_quad_eddy = layers.QuadCoeffToMatrix(ndims=ndims, name='build_eddy_quad_transfo')(quad_eddy)
+            transfo_quad_eddy = layers.QuadUnidirToDenseShift(shape=imshape, dire=ped, center=center)(transfo_quad_eddy)
+            transfo_eddy = KL.add((transfo_eddy, transfo_quad_eddy))
             
-        dw_input = tf.keras.Input(shape=(*volshape, 1))
-        return tf.keras.Model(warp_model.inputs + [dw_input], outputs)([b0_trans, dw_trans, dw], training=False)
+    elif transfo == 'deformable':
+        # eddy part
+        cnn_model = cnn(imshape=imshape,
+                        nb_in_chan=2,
+                        nb_out_chan=1,
+                        nb_enc_feats=nb_enc_feats,
+                        nb_dec_feats=nb_dec_feats,
+                        nb_conv_lvl=nb_conv_lvl,
+                        down_type=down_type,
+                        activation = activation,
+                        final_activation=None,
+                        get_bottle=True,
+                        name='eddy_cnn')
+
+        transfo_unidir_eddy, bottle = cnn_model(b0_dw)
+        
+        transfo_eddy = layers.expand_unidir_shift(ndims=ndims, ped=ped)(transfo_unidir_eddy)
+
+        # rigid part
+        rigid_params = conv(filters=nb_enc_feats[-1], kernel_size=3, strides=1, padding='same',
+                            activation=activation, name='eddy_cnn_enc_last_conv')(bottle)
+        rigid_params = KL.Flatten()(rigid_params)
+        for j, nf in enumerate(nb_dense_feats):
+            rigid_params = KL.Dense(nf, activation=activation, name='mlp_eddy_%d' % j)(rigid_params) 
+        
+        trans_rig = rigid_params
+        lin_rig = rigid_params
+            
+    trans_rig = KL.Dense(ndims, kernel_initializer=trans_init, name='trans_rig',activation=None)(trans_rig)
+    lin_rig  = KL.Dense(ndims, kernel_initializer=lin_init, name='lin_rig',activation=None)(lin_rig)    
+    transfo_rig = layers.AffCoeffToMatrix(ndims=ndims, transfo_type='rigid', center=center, name='build_rigid_transfo')([trans_rig,lin_rig])
+
+    full_transfo = voxelmorph.layers.ComposeTransform(shift_center=False, name='compose_transfos')([transfo_eddy, transfo_rig])
+
+    dw_corr = voxelmorph.layers.SpatialTransformer(interp_method='linear', indexing='ij', name='full_transformer')([dw_in, full_transfo])
+    if jacob_mod:
+        dw_corr = layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True, name='jac_modul_dw')([dw_corr, full_transfo])
     
-
-class encoder(tf.keras.Model): # Similar code to voxelmorph's Unet but truncated to only keep the encoder part.
-    """
-    An encoder architecture that builds off either an input keras model or input shape. Layer features can be
-    specified directly as a list of encoder features or as a single integer along with a number of encoder levels.
-    """
-
-    def __init__(self,
-                 inshape=None,
-                 input_model=None,
-                 nb_features=[16, 32, 32, 32, 32],
-                 nb_levels=None,
-                 max_pool=2,
-                 feat_mult=1,
-                 nb_conv_per_level=1,
-                 kernel_initializer='he_normal',
-                 name='enc'):
-        """
-        Parameters:
-            inshape: Optional input tensor shape (including features). e.g. (192, 192, 192, 2).
-            input_model: Optional input model that feeds directly into the enc before concatenation.
-            nb_features: enc convolutional features. Can be specified via a list of lists with
-                the form [[encoder feats], [decoder feats]], or as a single integer. If None (default),
-                the enc features are defined by the default config described in the class documentation.
-            nb_levels: Number of levels in enc. Only used when nb_features is an integer. Default is None.
-            feat_mult: Per-level feature multiplier. Only used when nb_features is an integer. Default is 1.
-            nb_conv_per_level: Number of convolutions per enc level. Default is 1.
-            name: Model name - also used as layer name prefix. Default is 'enc'.
-        """
-
-         # have the option of specifying input shape or input model
-        if input_model is None:
-            if inshape is None:
-                raise ValueError('inshape must be supplied if input_model is None')
-            enc_input = KL.Input(shape=inshape, name='%s_input' % name)
-            model_inputs = [enc_input]
-        else:
-            if len(input_model.outputs) == 1:
-                enc_input = input_model.outputs[0]
-            else:
-                enc_input = KL.concatenate(input_model.outputs, name='%s_input_concat' % name)
-            model_inputs = input_model.inputs
-
-        # build feature list automatically
-        if isinstance(nb_features, int):
-            if nb_levels is None:
-                raise ValueError('must provide enc nb_levels if nb_features is an integer')
-            feats = np.round(nb_features * feat_mult ** np.arange(nb_levels)).astype(int)
-            nb_features = [np.repeat(feats[:-1], nb_conv_per_level),
-                           np.repeat(np.flip(feats), nb_conv_per_level)]
-        elif nb_levels is not None:
-            raise ValueError('cannot use nb_levels if nb_features is not an integer')
-
-        ndims = len(enc_input.get_shape()) - 2
-        assert ndims in (1, 2, 3), 'ndims should be one of 1, 2, or 3. found: %d' % ndims
-        MaxPooling = getattr(KL, 'MaxPooling%dD' % ndims)
-        
-        nb_levels = int(len(nb_features) / nb_conv_per_level) + 1
-        
-        if isinstance(max_pool, int):
-            max_pool = [max_pool] * nb_levels
-
-        # configure encoder (down-sampling path)
-        last = enc_input
-        for level in range(nb_levels - 1):
-            for conv in range(nb_conv_per_level):
-                nf = nb_features[level * nb_conv_per_level + conv]
-                layer_name = '%s_enc_conv_%d_%d' % (name, level, conv)
-                last = voxelmorph.networks._conv_block(last, nf, name=layer_name,
-                                                       kernel_initializer=kernel_initializer)
-
-            # temporarily use maxpool since downsampling doesn't exist in keras
-            last = MaxPooling(max_pool[level], name='%s_enc_pooling_%d' % (name, level))(last)
-        layer_name = '%s_enc_conv_final' % (name)
-        last = voxelmorph.networks._conv_block(last, nf, name=layer_name,
-                                               kernel_initializer=kernel_initializer)
-        
-        super().__init__(inputs=model_inputs, outputs=last, name=name)
-   
+    outputs = [dw_corr]
+    if transfo == 'deformable':
+        outputs += [transfo_unidir_eddy]
+    
+    model = tf.keras.Model(inputs=[b0_in, dw_in], outputs=outputs, name=name)
+    return model

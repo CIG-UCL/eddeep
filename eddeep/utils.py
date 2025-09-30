@@ -5,7 +5,9 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import SimpleITK as sitk
 import pandas as pd
-import neurite as ne
+
+from external import neurite as ne
+
 
 def develop(x, dec='|_'):
     
@@ -85,6 +87,7 @@ def plot_losses(loss_file, is_val=False, do_log=False, write=True,
         if xmax[l] is not None: axs[l].set_xlim(right=xmax[l])
         if ymin[l] is not None: axs[l].set_ylim(bottom=ymin[l])    
         if ymax[l] is not None: axs[l].set_ylim(top=ymax[l])
+        axs[l].grid(axis='y')
     plt.tight_layout()
     plt.suptitle(suptitle)
     
@@ -148,7 +151,7 @@ def resample_image(img, size, matO, interp):
 
 def normalize_intensities(img, wmin=0, wmax=None, omin=0, omax=1, dtype=sitk.sitkFloat32):
     """
-    Normalize intensities of an image between 0 and 1.
+    Normalize intensities of an itk image between 0 and 1.
     """
     listed = True
     if not isinstance(img, (list, tuple)):
@@ -180,7 +183,19 @@ def normalize_intensities(img, wmin=0, wmax=None, omin=0, omax=1, dtype=sitk.sit
     
     return img
     
+
+def normalize_intensities_q(arr, q=0.99):
+    """
+    Normalize values of an array between 0 and 1.
+    """
     
+    val_q = np.quantile(arr, q)
+    arr = np.clip(arr, 0, val_q) / val_q
+    
+    return arr
+    
+
+
 def change_img_res(img, vox_sz=[2,2,2], interp=sitk.sitkLinear):
     """
     Change the resolution while keeping the position and all.
@@ -224,13 +239,13 @@ def change_img_size(img, grid_sz=[96,128,96]):
     img = sitk.Crop(img, crop_bound_inf, crop_bound_sup)
     
     return img
-        
-        
+              
+  
 def pad_image(img, k=5, out_size=None, bg_val=0):
     """
     Pad an image such that image size along each dimension is a multiple of 2^k.
     """
-    in_size = np.array(img.Size(), dtype=np.float32)
+    in_size = np.array(img.GetSize(), dtype=np.float32)
     if out_size is None:
         if k is None:
             out_size = np.power(2, np.ceil(np.log(in_size)/np.log(2)))
@@ -250,7 +265,7 @@ def pad_image(img, k=5, out_size=None, bg_val=0):
     return paddedImg
 
 
-def unpad_image(padded_img, original_size, k=5):
+def unpad_image(padded_img, original_size):
 
     original_size = np.array(original_size, dtype=np.float32)
     padded_size = np.array(padded_img.GetSize(), dtype=np.float32)
@@ -391,30 +406,6 @@ class get_real_transfo_aff:
         
         return matO
    
-    
-def pad_image(img, k=5, outSize=None, bg_val=0):
-    """
-    Pad an image such that image size along each dimension becomes of form 2^k.
-    """
-    inSize = np.array(img.GetSize(), dtype=np.float32)
-    if outSize is None:
-        if k is None:
-            outSize = np.power(2, np.ceil(np.log(inSize)/np.log(2)))
-        else:
-            outSize = np.ceil(inSize / 2**k) * 2**k
-            
-    lowerPad = np.round((outSize - inSize) / 2)
-    upperPad = outSize - inSize - lowerPad
-    
-    padder = sitk.ConstantPadImageFilter()
-    padder.SetConstant(bg_val)
-    padder.SetPadLowerBound(lowerPad.astype(int).tolist())
-    padder.SetPadUpperBound(upperPad.astype(int).tolist())
-    
-    paddedImg = padder.Execute(img)
-    
-    return paddedImg
-
 
 def one_hot_enc(seg, labs, segtype='itkimg', dtype=np.int8):
     """
@@ -429,9 +420,11 @@ def one_hot_enc(seg, labs, segtype='itkimg', dtype=np.int8):
         direction = np.ravel(direction)
         spacing = seg.GetSpacing() + (1,)
         seg = sitk.GetArrayFromImage(seg)
+        
     seg = [seg==lab for lab in labs]
     seg = np.stack(seg, axis=-1)
     seg = seg.astype(dtype)
+    
     if segtype == 'itkimg':    
         seg = np.transpose(seg, [ndims] + [*range(ndims)])
         seg = sitk.GetImageFromArray(seg, isVector=False)
@@ -479,7 +472,7 @@ def quadratic_unidir_to_dense_shift(matrix, dire, shape, center=None, indexing='
     mesh = [f if f.dtype == matrix.dtype else tf.cast(f, matrix.dtype) for f in mesh]
 
     # transform into a large matrix
-    flat_mesh = [ne.utils.flatten(f) for f in mesh]
+    flat_mesh = [tf.reshape(f, [-1]) for f in mesh]
     mesh_matrix = tf.transpose(tf.stack(flat_mesh, axis=1))  # ndims x nb_voxels
     if center is not None:
         center = tf.cast(center, dtype=matrix.dtype)[..., None]

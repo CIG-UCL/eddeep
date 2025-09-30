@@ -5,104 +5,101 @@ import scipy
 import eddeep.utils
 
 
-class intensity_aug:
+
+def interp_dw(b0, dw, eps=1e-9):
     
-    def __init__(self, n_cpts=20, fix0=True,
-                 std_defo_add=None, std_defo_mult=None, std_defo_smo=None,
-                 distrib_noise=None, max_snr=50):
+    b0_log = sitk.Log(b0 + eps)
+    dw_log = sitk.Log(dw + eps)
         
-        self.n_cpts = n_cpts
-        self.std_defo_add = std_defo_add
-        self.std_defo_mult = std_defo_mult
-        self.std_defo_smo = std_defo_smo
-        self.fix0 = fix0
-        self.distrib_noise = distrib_noise
-        self.max_snr = max_snr
+    alpha = float(2.02-scipy.stats.skewnorm.rvs(5,1,0.05,1)[0])
+    b0 = sitk.Exp(alpha*b0_log + (1-alpha)*dw_log) - eps
+    
+    beta = float(2.2-scipy.stats.skewnorm.rvs(5,1,0.5,1)[0])
+    dw = sitk.Exp(beta*dw_log + (1-beta)*b0_log) - eps
+    
+    return b0, dw
+
+
+class intensity_aug:
+     
+    def __init__(self, img_geom):
         
-    def transform(self, x_img):
+        self.img_geom = img_geom
+        self.ndims = img_geom.GetDimension()
+        self.dtype = img_geom.GetPixelID()
+        self.noise_params = None
+        self.bias_field_params = None
+        
+    def transform(self, img_list):
+        
+        img_aug_list = []
+        for img in img_list:
+            
+            img_aug = img
+            
+            if self.bias_field_params is not None:
+                bias_field = self.gen_bias_field(self.bias_field_params)
+                bias_field = sitk.Cast(bias_field, self.dtype)
+                img_aug *= 1 + bias_field
+                
+            if self.noise_params is not None:
+                noise = self.gen_noise(self.noise_params, img)
+                noise = sitk.Cast(noise, self.dtype)
+                img_aug += noise
+                
+            img_aug_list += [img_aug]
+            
+        return img_aug_list
+        
+        
+    def set_bias_field_params(self, shrink_factor=8, smooth_factor=16, field_std_max=3):
+        self.bias_field_params = {'shrink_factor': shrink_factor,
+                                  'smooth_factor': smooth_factor,
+                                  'field_std_max': field_std_max}
+        
+    def set_noise_params(self, distrib='rician', max_snr=30):
+        self.noise_params = {'distrib': distrib,
+                             'max_snr': max_snr}
+        
+    def gen_bias_field(self, bias_field_params):
+        
+        shrink_factor = bias_field_params['shrink_factor']
+        smooth_factor = bias_field_params['smooth_factor']
+        field_std_max = bias_field_params['field_std_max']
+        
+        shrink_img = sitk.Shrink(self.img_geom, [shrink_factor]*self.ndims)
+        shrinked_shape = list(shrink_img.GetSize()[::-1])            
+        field_std = 2*field_std_max*(np.random.rand(1)-0.5)
+        field = field_std * np.random.normal(size = shrinked_shape)
+        field_img = sitk.GetImageFromArray(field)
+        field_img.CopyInformation(shrink_img)
+        
+        resampler = sitk.ResampleImageFilter()
+        resampler.SetReferenceImage(self.img_geom)
+        resampler.SetUseNearestNeighborExtrapolator(True)
+        field_img = resampler.Execute(field_img)
+        
+        gaussian = sitk.SmoothingRecursiveGaussianImageFilter()
+        gaussian.SetSigma(smooth_factor)
+        field_img = gaussian.Execute(field_img)
+        
+        return field_img
+
+    
+    def gen_noise(self, noise_params, x_img):
+        
+        max_snr = noise_params['max_snr']
+        distrib = noise_params['distrib']
         
         x = sitk.GetArrayFromImage(x_img)
-        
-        self.compute_defo_parameters(x)
-        self.compute_defo(x)
-        self.compute_noise(x)
-                
-        defo_add_img = sitk.GetImageFromArray(self.defo_add)
-        defo_add_img.CopyInformation(x_img)
-        defo_add_img = sitk.Cast(defo_add_img, x_img.GetPixelID())
-        
-        defo_mult_img = sitk.GetImageFromArray(self.defo_mult)
-        defo_mult_img.CopyInformation(x_img)
-        defo_mult_img = sitk.Cast(defo_mult_img, x_img.GetPixelID())
-
-        noise_img = sitk.GetImageFromArray(self.noise)
-        noise_img.CopyInformation(x_img)
-        noise_img = sitk.Cast(noise_img, x_img.GetPixelID())
-        
-        return x_img * defo_mult_img + defo_add_img + noise_img
-    
-    
-    def compute_defo_parameters(self, x):
-        
-        if self.n_cpts > 0:
-            self.x_shape = x.shape
-            self.bounds = [np.amin(x), np.amax(x)]
-            
-            if self.std_defo_add is None:
-                self.std_defo_add = np.std(np.ravel(x))
-                
-            if self.std_defo_mult is None:
-                self.std_defo_mult = 0.25
-                
-            if self.std_defo_smo is None:
-                self.std_defo_smo = (self.bounds[1]-self.bounds[0]) / self.n_cpts 
-    
-            self.cpts = np.squeeze(scipy.stats.qmc.Sobol(1).random(self.n_cpts))
-            self.cpts = (self.bounds[1]-self.bounds[0]) * self.cpts + self.bounds[0]
-            
-            self.loc_defo_add = self.std_defo_add*np.random.randn(self.n_cpts) 
-            self.loc_defo_mult = np.exp(np.log(1+self.std_defo_mult)*np.random.randn(self.n_cpts))
-
-        
-    def compute_defo(self, x):  
-        
-        if self.n_cpts > 0:
-            defo_add = np.zeros(self.x_shape)
-            defo_mult = np.zeros(self.x_shape)
-            weight_sum = np.zeros_like(x) + 1e-15
-            for c in range(self.n_cpts):
-                weight = np.exp(-(x - self.cpts[c])**2 / (2*self.std_defo_smo**2))
-                defo_add += weight * self.loc_defo_add[c]
-                defo_mult += weight * self.loc_defo_mult[c]
-                weight_sum += weight
-            defo_add /= weight_sum
-            defo_mult /= weight_sum
-    
-            if self.fix0:
-                loc_defo_add = -defo_add[x == 0][0]
-                loc_defo_mult = 1/defo_mult[x == 0][0] - 1
-                weight = np.exp(-x**2 / (2*self.std_defo_smo**2))
-                defo_add += weight * loc_defo_add
-                defo_mult *= 1 + weight * loc_defo_mult 
-                
-            self.defo_add = defo_add
-            self.defo_mult = defo_mult
-            
-        else:
-            self.defo_add = np.zeros_like(x)
-            self.defo_mult = np.ones_like(x)
-
-    
-    def compute_noise(self, x):
-        
-        snr = self.max_snr * np.random.rand()
-        sample_signal = np.quantile(x.ravel(), 0.8)
+        snr = max_snr * np.random.rand()
+        sample_signal = np.quantile(x[x>0].ravel(), 0.8)
         sigma = sample_signal / snr
         
-        if self.distrib_noise in ('rician', 'gaussian'):
+        if distrib in ('rician', 'gaussian'):
             noise = np.random.normal(0, sigma, x.shape)
         
-            if self.distrib_noise == 'rician':
+            if distrib == 'rician':
                 noise_imag = np.random.normal(0, sigma, x.shape)
                 x_real_noisy = x + noise
                 x_imag_noisy = noise_imag
@@ -110,8 +107,11 @@ class intensity_aug:
         
         else:
             noise = np.zeros_like(x)
+            
+        noise_img = sitk.GetImageFromArray(noise)
+        noise_img.CopyInformation(self.img_geom)
         
-        self.noise = noise
+        return noise_img
         
 
 def skew_symmetric(v):
@@ -204,7 +204,7 @@ class spatial_aug:
                                'int_steps': int_steps,
                                'gpu': gpu}
         
-    def set_diffeo_params(self, shrink_factor=8, smooth_factor=6, svf_std_max=8, int_steps=6):
+    def set_diffeo_params(self, shrink_factor=8, smooth_factor=6, svf_std_max=8, int_steps=4):
         self.diffeo_params = {'shrink_factor': shrink_factor,
                               'smooth_factor': smooth_factor,
                               'svf_std_max': svf_std_max,

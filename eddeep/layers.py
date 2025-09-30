@@ -1,12 +1,13 @@
 import tensorflow as tf
 from tensorflow.keras.layers import Layer
-from . import utils
+from keras.saving import register_keras_serializable
+
+from eddeep import utils
     
 
+@register_keras_serializable(package='my_layers')
 class expLinearTransfo(Layer):
-    """
-    """
-           
+
     def __init__(self, ndims, **kwargs):
            
         self.ndims = ndims
@@ -26,8 +27,19 @@ class expLinearTransfo(Layer):
         matAff = tf.slice(matAff,[0, 0],[self.ndims, self.ndims+1])
 
         return matAff
-      
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({"ndims": self.ndims})
+        return config
 
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+        
+        
+
+@register_keras_serializable(package='my_layers')
 class AffCoeffToMatrix(Layer):
     """
     Build the affine matrix from estimated affine coefficients.
@@ -44,8 +56,7 @@ class AffCoeffToMatrix(Layer):
             raise NotImplementedError('2D or 3D only')
         self.transfo_type = transfo_type
         self.dire = dire
-        self.center = center[None, ...] if center is not None else None
-        
+        self.center = center
         super().__init__(**kwargs)
         
 
@@ -77,7 +88,8 @@ class AffCoeffToMatrix(Layer):
             lin = self.expm(lin)
         
         if self.center is not None:
-            trans = trans + self.center - tf.matmul(lin, self.center[...,None])[..., 0]
+            center = tf.constant(self.center, dtype=trans.dtype)
+            trans = trans + center[None, ...] - tf.matmul(lin, center[None,...,None])[..., 0]
             
         return tf.concat((lin, trans[..., None]), axis=2)  
     
@@ -103,10 +115,6 @@ class AffCoeffToMatrix(Layer):
             else:
                 lin.append(tf.zeros((1, self.ndims)))
         lin = tf.concat(lin, axis=0)
-
-       # lin = tf.convert_to_tensor([[ 0       ,0        ,0        ],
-       #                             [vector[0],vector[1],vector[2]],
-       #                             [0        , 0       ,0        ]]) 
                    
         return lin     
      
@@ -119,7 +127,22 @@ class AffCoeffToMatrix(Layer):
         
         return mat
 
+            
+    def get_config(self):
+        config = super().get_config()
+        config.update({"ndims": self.ndims,
+                       "transfo_type": self.transfo_type,
+                       "dire": self.dire,
+                       "center": self.center})
+        return config
 
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+    
+    
+
+@register_keras_serializable(package='my_layers')
 class QuadCoeffToMatrix(Layer):
     """
     Build the quadradic matrix from estimated quadratic coefficients.
@@ -134,8 +157,7 @@ class QuadCoeffToMatrix(Layer):
         
 
     def call(self, quad_params):
-        """
-        """
+
         quad = tf.map_fn(self._single_quadMat, quad_params, dtype=tf.float32)
         
         return quad   
@@ -151,8 +173,21 @@ class QuadCoeffToMatrix(Layer):
                                         [vector[1], vector[2]]])     
 
         return mat
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "ndims": self.ndims
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
     
- 
+
+
+@register_keras_serializable(package='my_layers')
 class QuadUnidirToDenseShift(Layer):
     """
     Converts an affine transform to a dense shift transform.
@@ -166,15 +201,15 @@ class QuadUnidirToDenseShift(Layer):
         self.dire = dire
         self.shape = shape
         self.ndims = len(shape)
-        self.center = center if center is not None else None
+        self.center = center
         super().__init__(**kwargs)
 
+
     def get_config(self):
-        config = super().get_config().copy()
+        config = super().get_config()
         config.update({
             'dire': self.dire,
             'shape': self.shape,
-            'ndims': self.ndims,
             'center': self.center,
         })
         return config
@@ -188,10 +223,14 @@ class QuadUnidirToDenseShift(Layer):
         Parameters:
             matrix: symmetric matrix of shape [B, N, N].
         """
-        single = lambda mat: utils.quadratic_unidir_to_dense_shift(mat, self.dire, self.shape, self.center)
+        if self.center is not None:
+            center = tf.constant(self.center, dtype=matrix.dtype)
+        single = lambda mat: utils.quadratic_unidir_to_dense_shift(mat, self.dire, self.shape, center)
         return tf.map_fn(single, matrix)
     
+
     
+@register_keras_serializable(package='my_layers')
 class get_real_transfo(Layer):
     """
     Compute the real coordinates affine transformation based on
@@ -259,7 +298,40 @@ class get_real_transfo(Layer):
         
         return mat
     
+
+
+@register_keras_serializable(package='my_layers')
+class expand_unidir_shift(Layer):
+
+    def __init__(self, ndims, ped, **kwargs):
+        self.ndims = ndims
+        self.ped = ped
+        super().__init__(**kwargs)
+
+    def call(self, transfo_eddy):
+        comps = []
+        for i in range(self.ndims):
+            if i == self.ped:
+                comps.append(transfo_eddy)
+            else:
+                comps.append(tf.zeros_like(transfo_eddy))
+        return tf.concat(comps, axis=-1)
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "ndims": self.ndims,
+            "ped": self.ped
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
     
+    
+
+@register_keras_serializable(package='my_layers')    
 class JacobianMultiplyIntensities(Layer):
 
     def __init__(self, indexing='ij', is_shift=True, dire=None, **kwargs):
@@ -280,3 +352,17 @@ class JacobianMultiplyIntensities(Layer):
         jacTransfo = tf.math.abs(jacTransfo)        
         
         return tf.expand_dims(jacTransfo,-1) * inputs[0]
+    
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "indexing": self.indexing,
+            "is_shift": self.is_shift,
+            "dire": self.dire
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
+    
