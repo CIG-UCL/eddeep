@@ -105,8 +105,10 @@ If you used **Eddeep** for your work, please cite the following:
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Eddeep: Fast eddy-current distortion correction for diffusion MRI with deep learning.  
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; MICCAI (2024) [[arxiv]](https://arxiv.org/pdf/2405.10723)
 
-The code uses Voxelmorph bits:
+The code uses bits from Neurite and Voxelmorph:
 
 &nbsp;[2] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)
+&nbsp;[3] **Neurite** [[github]](https://github.com/adalca/neurite)
+
 
 
