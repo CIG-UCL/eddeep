@@ -57,7 +57,7 @@ There must be b=0!
 ### Training the translator
 ```bash
 eddeep_dir=<path-to-eddeep>
-out_dir=<path-to-output-dir>
+model_dir=<path-to-models>
 ```
 
 ```bash
@@ -67,7 +67,7 @@ data_precorr_val_dir=<path-to-precorrected-validation-data-dir>
 
 python ${eddeep_dir}/scripts/train_eddeep_trans.py -t ${data_precorr_train_dir}\
                                                    -v ${data_precorr_val_dir}\
-                                                   -o ${out_dir}/trans\
+                                                   -o ${model_dir}/trans\
                                                    -B ${bvaltarget} -e 400 -as 0.5 -ai 0.5
 ```
 
@@ -78,22 +78,26 @@ data_val_dir=<path-to-validation-data-dir>
 
 python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
                                                   -v ${data_val_dir}\
-                                                  -tr ${out_dir}/trans_gen_best.keras\
-                                                  -o ${out_dir}/corr\
+                                                  -tr ${model_dir}/trans_gen_best.keras\
+                                                  -o ${model_dir}/corr\
                                                   -p 1\
                                                   -e 200 -as 0.5
 ```
 
-### Applying the correction
+## Correct for eddy distortions with a pre-trained **Eddeep**
+Given:
+  - A pre-trained **Eddeep** translator (e.g. `trans_gen_best.keras`).
+  - A pre-trained **Eddeep** registrator (e.g. `corr_best.keras`).
 ```bash
 dw=<path-to-dw-4D-data>
 dw_corr=<path-to-corrected-dw-4D-data>
 bval=<path-to-bval-file>
+model_dir=<path-to-models>
 
 python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -o ${dw_corr}\
-                                                 -tr ${out_dir}/trans_gen_best.keras\
-                                                 -reg ${out_dir}/corr_best.keras\
+                                                 -tr ${model_dir}/trans_gen_best.keras\
+                                                 -reg ${model_dir}/corr_best.keras\
                                                  -b ${bval}
 ```
 
