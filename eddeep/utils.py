@@ -280,7 +280,7 @@ def unpad_image(padded_img, original_size):
 
 
 def jacobian(transfo, outDet=False, dire=None, is_shift=False):
-    # takes a tensor of shape [batch_size, sx, sy, (sz,) ndims] as input.
+    # takes a tensor of shape [batch_size, sx, sy, (sz,) ndirs] as input.
     
     if isinstance(transfo.shape, (tf.compat.v1.Dimension, tf.TensorShape)):
         volshape = transfo.shape[1:-1].as_list()
@@ -289,14 +289,17 @@ def jacobian(transfo, outDet=False, dire=None, is_shift=False):
     ndims = len(volshape)
     ndirs = transfo.shape[-1]
     if dire is not None and ndirs != 1:
-        raise Exception('the last dim should be of size 1 for a unidirectional field, but got: %s' % ndims)
+        raise Exception('the last dim should be of size 1 for a unidirectional field, but got: %s' % ndirs)
     
     jacob = []
     for d in range(ndims):
-        grad = tf.gather(transfo, range(2, volshape[d]), axis=d+1)-tf.gather(transfo, range(volshape[d]-2), axis=d+1)
-        grad_left = tf.gather(transfo, [1], axis=d+1)-tf.gather(transfo, [0], axis=d+1)
-        grad_right = tf.gather(transfo, [volshape[d]-1], axis=d+1)-tf.gather(transfo, [volshape[d]-2], axis=d+1)
-        grad = tf.concat((grad_left, grad/2, grad_right), axis=d+1)  
+        grad = tf.gather(transfo, range(2, volshape[d]), axis=d+1) - \
+               tf.gather(transfo, range(volshape[d]-2), axis=d+1)
+        grad_left = tf.gather(transfo, [1], axis=d+1) - \
+                    tf.gather(transfo, [0], axis=d+1)
+        grad_right = tf.gather(transfo, [volshape[d]-1], axis=d+1) - \
+                     tf.gather(transfo, [volshape[d]-2], axis=d+1)
+        grad = tf.concat((grad_left, grad / 2, grad_right), axis=d+1)  
         grad = tf.expand_dims(grad, axis=-1)
         jacob += [grad]
     
@@ -435,18 +438,21 @@ def one_hot_enc(seg, labs, segtype='itkimg', dtype=np.int8):
     return seg
 
 
-def grid_img(volshape, omitdim=[2], spacing=5):
+def grid_img(volshape, omit_dim=None, spacing=5):
+    
+    if omit_dim is None:
+        omit_dim = []
+    
+    ndims = len(volshape)
     g = np.zeros(volshape)
     
-    for i in range(0,volshape[0], spacing):
-        if 0 not in omitdim:
-            g[i,:,:] = 1
-    for j in range(0,volshape[1], spacing):
-        if 1 not in omitdim:
-            g[:,j,:] = 1
-    for k in range(0,volshape[2], spacing):
-        if 2 not in omitdim:
-            g[:,:,k] = 1 
+    for dim in range(ndims):
+        if dim not in omit_dim:
+            slices = [slice(None)] * ndims
+            for i in range(0, volshape[dim], spacing):
+                slices[dim] = i
+                g[tuple(slices)] = 1
+  
     return g
 
 
