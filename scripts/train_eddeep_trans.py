@@ -40,6 +40,7 @@ parser.add_argument('-v', '--val_data', type=str, required=False, default=None, 
 # ├── ...
 parser.add_argument('-B', '--target_bval', type=int, required=True, help='Target b-value for translation (must be among the existing b-values in the data). Required.')
 parser.add_argument('-k', '--kpad', type=int, required=False, default=5, help='k to pad the input so that its shape is of form 2**k. Has to be >= number encoding steps. Default: 5')
+parser.add_argument('-vs', '--vox_size', type=float, required=False, default=2., help='Isotropic voxel size (mm) the images are resampled to. Stored in the model and reused for the correction training and inference. Default: 2.')
 # model and its hyper-paramaters
 parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension). Required.")
 parser.add_argument('-lr', '--learning-rate', type=float, required=False, default=1e-4, help="Learning rate. Default: 1e-4.")
@@ -88,6 +89,7 @@ gen_train = eddeep.generators.eddeep_fromDWI(subdirs=sub_dirs,
                                              get_dwmean = True,
                                              spat_aug_prob = args.aug_spat_prob,
                                              int_aug_prob = args.aug_int_prob,
+                                             vox_size=args.vox_size,
                                              batch_size=args.batch_size)
 
 n_train = len(sub_dirs)
@@ -104,6 +106,7 @@ else:
                                                get_dwmean = True,
                                                spat_aug_prob = 0,
                                                int_aug_prob = 0,
+                                               vox_size=args.vox_size,
                                                batch_size=args.batch_size)
     n_val = len(sub_dirs_val)
     sample = next(gen_val)
@@ -131,6 +134,8 @@ if args.resume:
     # load existing model
     tab_loss = pandas.read_csv(loss_file, sep=',')
     generator = tf.keras.models.load_model(gen_last_path)
+    if eddeep.utils.get_vox_size(generator) != args.vox_size:
+        sys.exit('Voxel size of the model to resume (%s) differs from -vs (%s).' % (eddeep.utils.get_vox_size(generator), args.vox_size))
     if args.gan:
         discriminator = tf.keras.models.load_model(dis_last_path)
         if is_val: best_gen_loss = np.min(tab_loss.val_gen0 + tab_loss.val_gen) / 2
@@ -148,7 +153,7 @@ else:
                                   nb_in_chan=1, nb_out_chan=1,
                                   nb_enc_feats=args.gen_enc_nf, nb_dec_feats=args.gen_dec_nf, nb_bottleneck_feats=[],
                                   nb_conv_lvl=args.nb_conv_lvl, do_skips=True,
-                                  down_type=down_type, final_activation=None)
+                                  down_type=down_type, final_activation=None, vox_size=args.vox_size)
     tf.keras.utils.plot_model(generator, to_file=args.model + '_gen_plot.png', show_shapes=True, show_layer_names=True, expand_nested=True)
     
     if args.loss == 'l1': img_loss_fun = tf.keras.losses.MeanAbsoluteError()

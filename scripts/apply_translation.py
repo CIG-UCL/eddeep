@@ -49,6 +49,7 @@ translator = tf.keras.models.load_model(args.trans)
 translator.trainable = False 
 
 input_shape = translator.input_shape[1:-1]
+vox_size = eddeep.utils.get_vox_size(translator)
 
 for i in range(len(inputs)):
     
@@ -58,11 +59,16 @@ for i in range(len(inputs)):
     dws_trans = []
     for j in trange(dws_img.GetSize()[-1], desc='img ' + str(i+1) + '/' + str(len(inputs))):
 
-        dw = preproc_img(dws_img[..., j], input_shape)
+        dw_img = dws_img[..., j]
+        dw_net = dw_img if vox_size is None else eddeep.utils.change_img_res(dw_img, [vox_size]*3)
+        dw = preproc_img(dw_net, input_shape)
         dw_trans = infer_translator(dw)
         
         dw_trans = sitk.GetImageFromArray(dw_trans[0,...,0])
-        dw_trans = eddeep.utils.unpad_image(dw_trans, img_shape)
+        dw_trans = eddeep.utils.unpad_image(dw_trans, dw_net.GetSize())
+        if vox_size is not None:
+            dw_trans.CopyInformation(dw_net)
+            dw_trans = sitk.Resample(dw_trans, dw_img, sitk.Transform(), sitk.sitkLinear, 0.0, dw_trans.GetPixelID())
         
         dws_trans.append(dw_trans)
         

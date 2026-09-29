@@ -79,6 +79,9 @@ with open(args.model + '_args.txt', 'w') as file:
       
 #%% Generators to access training (and validation) data.
 
+translator = tf.keras.models.load_model(args.trans)
+vox_size = eddeep.utils.get_vox_size(translator)
+
 is_val = args.val_data is not None
 
 # training images
@@ -89,6 +92,7 @@ gen_train = eddeep.generators.eddeep_fromDWI(subdirs=sub_dirs,
                                              k=args.kpad,
                                              spat_aug_prob=args.aug_spat_prob,
                                              aug_dire=args.ped,
+                                             vox_size=vox_size,
                                              batch_size=args.batch_size)
 
 # validation images
@@ -102,6 +106,7 @@ else:
     gen_val = eddeep.generators.eddeep_fromDWI(subdirs=sub_dirs_val,                                                          
                                                k=args.kpad,
                                                spat_aug_prob=0,
+                                               vox_size=vox_size,
                                                batch_size=args.batch_size)
     sample = next(gen_val)
     
@@ -118,8 +123,6 @@ loss_file = args.model + '_losses.csv'
 
 model_path = args.model + '_best.keras'
 model_last_path = args.model + '_last.keras'
-    
-translator = tf.keras.models.load_model(args.trans)
 
 if args.resume:
     # load existing model
@@ -143,7 +146,8 @@ else:
                                          transfo=args.transfo,               
                                          jacob_mod=False,
                                          nb_dense_feats=args.dense_nf,
-                                         nb_conv_lvl=args.nb_conv_lvl)
+                                         nb_conv_lvl=args.nb_conv_lvl,
+                                         vox_size=vox_size)
     tf.keras.utils.plot_model(registrator, to_file=args.model + '_plot.png', show_shapes=True, show_layer_names=True, expand_nested=True)
 
     if args.loss == 'l1': img_loss_fun = tf.keras.losses.MeanAbsoluteError()

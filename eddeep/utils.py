@@ -201,24 +201,30 @@ def change_img_res(img, vox_sz=[2,2,2], interp=sitk.sitkLinear):
     Change the resolution while keeping the position and all.
     """
     
-    ndims = img.GetDimension()
-    direction = list(img.GetDirection()) 
-    spacing = list(img.GetSpacing())
-    origin = list(img.GetOrigin())
-    size = list(img.GetSize())
+    direction = np.reshape(img.GetDirection(), (img.GetDimension(),)*2)
+    spacing = np.array(img.GetSpacing())
+    size = np.array(img.GetSize())
+    vox_sz = np.array(vox_sz, dtype=float)
 
-    size_new = [int(size[d] * spacing[d] / vox_sz[d]) for d in range(ndims)]
-    true_vox_sz = [size[d] * spacing[d] / size_new[d] for d in range(ndims)]
-    origin_new = [origin[d] + (true_vox_sz[d] - spacing[d]) / 2 for d in range(ndims)]
-    
+    size_new = np.maximum(np.round(size * spacing / vox_sz), 1).astype(int)
+    center = img.TransformContinuousIndexToPhysicalPoint(((size - 1) / 2).tolist())
+    origin_new = np.array(center) - direction @ (vox_sz * (size_new - 1) / 2)
+
     resampler = sitk.ResampleImageFilter()
-    resampler.SetSize(size_new)
-    resampler.SetOutputOrigin(origin_new)
-    resampler.SetOutputSpacing(true_vox_sz)
-    resampler.SetOutputDirection(direction)
+    resampler.SetSize(size_new.tolist())
+    resampler.SetOutputOrigin(origin_new.tolist())
+    resampler.SetOutputSpacing(vox_sz.tolist())
+    resampler.SetOutputDirection(img.GetDirection())
     resampler.SetInterpolator(interp)
-    
+
     return resampler.Execute(img)
+
+
+def get_vox_size(model):
+    try:
+        return model.get_layer('vox_size').vox_size
+    except ValueError:
+        return None
     
 
 def change_img_size(img, grid_sz=[96,128,96]):

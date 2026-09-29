@@ -68,8 +68,10 @@ data_precorr_val_dir=<path-to-precorrected-validation-data-dir>
 python ${eddeep_dir}/scripts/train_eddeep_trans.py -t ${data_precorr_train_dir}\
                                                    -v ${data_precorr_val_dir}\
                                                    -o ${model_dir}/trans\
-                                                   -B ${bvaltarget} -e 400 -as 0.5 -ai 0.5
+                                                   -B ${bvaltarget} -e 400 -as 0.5 -ai 0.5\
+                                                   -vs 2
 ```
+Images are resampled to an isotropic voxel size (`-vs`, 2 mm by default), which is stored in the model. The registrator training and the inference scripts read it from the model, so it only needs to be set here.
 
 ### Training the registrator
 ```bash

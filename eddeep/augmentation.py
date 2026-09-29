@@ -422,7 +422,6 @@ class spatial_aug_dir:
     def __init__(self, img_geom, dire=1):
         img_geom.SetDirection([1,0,0,0,1,0,0,0,1])
         img_geom.SetOrigin([0,0,0])
-        img_geom.SetSpacing([2,2,2])
         self.img_geom = img_geom
         self.ndims = img_geom.GetDimension()
         self.spacing = img_geom.GetSpacing()
@@ -442,7 +441,7 @@ class spatial_aug_dir:
         for img in img_list:
             img.SetDirection([1,0,0,0,1,0,0,0,1])
             img.SetOrigin([0,0,0])
-            img.SetSpacing([2,2,2])
+            img.SetSpacing(self.spacing)
             img_aug_list += [resampler.Execute(img)]
         
         return img_aug_list

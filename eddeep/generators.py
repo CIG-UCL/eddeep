@@ -32,6 +32,7 @@ def eddeep_fromDWI(subdirs,
                    int_aug_prob=0,
                    aug_dire = None,
                    prob_bval=True,
+                   vox_size=None,
                    batch_size=1):
     # sub
     #   |_ PED
@@ -87,17 +88,20 @@ def eddeep_fromDWI(subdirs,
             b0 = sitk.ReadImage(os.path.join(sub_i, ped_i, 'b0', b0_file_i))
             b0 = sitk.Cast(b0, sitk.sitkFloat32)
             b0 = sitk.Clamp(b0, lowerBound=0.0)
+            if vox_size is not None: b0 = eddeep.utils.change_img_res(b0, [vox_size]*3)
             b0 = eddeep.utils.pad_image(b0, k=k)
-            
+
             dw = sitk.ReadImage(os.path.join(sub_i, ped_i, bval_i, dw_file_i))
             dw = sitk.Cast(dw, sitk.sitkFloat32)
             dw = sitk.Clamp(dw, lowerBound=0.0)
+            if vox_size is not None: dw = eddeep.utils.change_img_res(dw, [vox_size]*3)
             dw = eddeep.utils.pad_image(dw, k=k)
-            
+
             if get_dwmean:
                 dw_mean = sitk.ReadImage(glob.glob(os.path.join(sub_i, ped_i,'*_b' + str(target_bval) + '_mean.nii.gz'))[0])
                 dw_mean = sitk.Cast(dw_mean, sitk.sitkFloat32)
                 dw_mean = sitk.Clamp(dw_mean, lowerBound=0.0)
+                if vox_size is not None: dw_mean = eddeep.utils.change_img_res(dw_mean, [vox_size]*3)
                 dw_mean = eddeep.utils.pad_image(dw_mean, k=k)
                 
             if np.random.rand() < spat_aug_prob:
@@ -156,7 +160,8 @@ def eddeep_fromDWI(subdirs,
 
 def eddeep_fromDWI_test(dw_file,
                         out_size,
-                        dwmean_file = None):
+                        dwmean_file = None,
+                        vox_size = None):
 
     dws_img = sitk.ReadImage(dw_file)
     n_vol = dws_img.GetSize()[-1]
@@ -166,6 +171,7 @@ def eddeep_fromDWI_test(dw_file,
 
         dw = sitk.Cast(dws_img[:,:,:,b], sitk.sitkFloat32)
         dw = sitk.Clamp(dw, lowerBound=0.0)
+        if vox_size is not None: dw = eddeep.utils.change_img_res(dw, [vox_size]*3)
         dw = eddeep.utils.pad_image(dw, out_size=out_size)
         dw = sitk.GetArrayFromImage(dw)[np.newaxis,..., np.newaxis]
         dw = eddeep.utils.normalize_intensities_q(dw, 0.999)
@@ -177,6 +183,7 @@ def eddeep_fromDWI_test(dw_file,
         dw_mean = sitk.ReadImage(dwmean_file)
         dw_mean = sitk.Cast(dw_mean, sitk.sitkFloat32)
         dw_mean = sitk.Clamp(dw_mean, lowerBound=0.0)
+        if vox_size is not None: dw_mean = eddeep.utils.change_img_res(dw_mean, [vox_size]*3)
         dw_mean = eddeep.utils.pad_image(dw_mean, out_size=out_size)
         dw_mean = sitk.GetArrayFromImage(dw_mean)[np.newaxis,..., np.newaxis]
         dw_mean = eddeep.utils.normalize_intensities_q(dw_mean, 0.999)

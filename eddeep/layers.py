@@ -6,6 +6,25 @@ from eddeep import utils
     
 
 @register_keras_serializable(package='my_layers')
+class VoxSize(Layer):
+    """
+    Identity layer storing the isotropic voxel size the model works at.
+    """
+
+    def __init__(self, vox_size, **kwargs):
+        self.vox_size = vox_size
+        super().__init__(**kwargs)
+
+    def call(self, x):
+        return x
+
+    def get_config(self):
+        config = super().get_config()
+        config.update({"vox_size": self.vox_size})
+        return config
+
+
+@register_keras_serializable(package='my_layers')
 class expLinearTransfo(Layer):
 
     def __init__(self, ndims, **kwargs):

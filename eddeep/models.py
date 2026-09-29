@@ -33,6 +33,7 @@ def cnn(imshape,
         res_factor=2,
         ker_size=3,
         get_bottle=False,
+        vox_size=None,
         name='cnn'):
     
     if nb_enc_feats is None: nb_enc_feats = [16, 32, 64, 128]
@@ -42,6 +43,8 @@ def cnn(imshape,
     # Define model input
     x_in = tf.keras.Input(shape=(*imshape, nb_in_chan), name=f'{name}_input')
     x = x_in
+    if vox_size is not None:
+        x = layers.VoxSize(vox_size, name='vox_size')(x)
 
     ndims = len(imshape)
     conv = get_conv(ndims)
@@ -107,6 +110,7 @@ def eddy_reg(imshape,
              jacob_mod=False,
              nb_dense_feats=None,
              activation='leaky_relu',
+             vox_size=None,
              name='eddy_reg'):
     
     if nb_enc_feats is None: nb_enc_feats = [16,28,56,75,128]
@@ -122,8 +126,9 @@ def eddy_reg(imshape,
     quad_init = KI.RandomNormal(stddev=1e-5) 
         
     b0_in = KL.Input(shape=(*imshape, 1), name='input_b0')
-    dw_in = KL.Input(shape=(*imshape, 1), name='input_dw') 
-    b0_dw = KL.Concatenate(axis=-1, name='inputs_concat')([b0_in, dw_in])
+    dw_in = KL.Input(shape=(*imshape, 1), name='input_dw')
+    b0 = b0_in if vox_size is None else layers.VoxSize(vox_size, name='vox_size')(b0_in)
+    b0_dw = KL.Concatenate(axis=-1, name='inputs_concat')([b0, dw_in])
     
     if transfo in ('linear', 'quadratic'):
         
