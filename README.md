@@ -106,7 +106,7 @@ python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -g ${bvec}\
                                                  -og ${bvec_rot}
 ```
-Rotated b-vectors (`-og`) use only the rotation part of the rigid component of the estimated transformation, relative to the first b=0 volume. They are written in FSL convention (voxel axes, x flipped for images whose orientation matrix has a positive determinant).
+Rotated b-vectors (`-og`): the estimated transformation includes a rigid component $R(x) = Ox + t$, relative to the first b=0 volume, with $O$ a rotation matrix and $t$ a translation, expressed in the voxel coordinates of the isotropic grid on which the transformation is estimated. The corrected volume is obtained by sampling the acquired volume at the full estimated transformation, composed of $R$ and an eddy-current component acting only along the phase-encoding direction. The acquired volume therefore shows the subject rotated by $O$ with respect to the reference. A gradient direction $g$ applied during acquisition corresponds to $O^\top g$ relative to the subject in the reference frame, so each b-vector is replaced by $g' = O^\top g$. The translation $t$ does not affect directions and the eddy-current component is not used. Since b-vectors are stored in FSL convention (voxel axes, with the first axis flipped when the orientation matrix has a positive determinant), the rotation is applied in that frame: $g' = F O^\top F g$, with $F = \mathrm{diag}(-1,1,1)$ in the flipped case and $F = I$ otherwise.
 
 ## References
 
