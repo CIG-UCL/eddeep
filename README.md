@@ -106,6 +106,7 @@ python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -g ${bvec}\
                                                  -og ${bvec_rot}
 ```
+Rotated b-vectors (`-og`) use only the rotation part of the rigid component of the estimated transformation, relative to the first b=0 volume. They are written in FSL convention (voxel axes, x flipped for images whose orientation matrix has a positive determinant).
 
 ## References
 
