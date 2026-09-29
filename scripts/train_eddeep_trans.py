@@ -40,7 +40,7 @@ parser.add_argument('-v', '--val_data', type=str, required=False, default=None, 
 # ├── ...
 parser.add_argument('-B', '--target_bval', type=int, required=True, help='Target b-value for translation (must be among the existing b-values in the data). Required.')
 parser.add_argument('-k', '--kpad', type=int, required=False, default=5, help='k to pad the input so that its shape is of form 2**k. Has to be >= number encoding steps. Default: 5')
-parser.add_argument('-vs', '--vox_size', type=float, required=False, default=2., help='Isotropic voxel size (mm) the images are resampled to. Stored in the model and reused for the correction training and inference. Default: 2.')
+parser.add_argument('-vs', '--vox_size', type=float, required=False, default=2., help='Isotropic voxel size (mm) the images are resampled to. Stored in the model and reused for the correction training and inference. 0 keeps the native resolution. Default: 2.')
 # model and its hyper-paramaters
 parser.add_argument('-o', '--model', type=str, required=True, help="Path prefix to the output model (without extension). Required.")
 parser.add_argument('-lr', '--learning-rate', type=float, required=False, default=1e-4, help="Learning rate. Default: 1e-4.")
@@ -62,6 +62,7 @@ parser.add_argument('-seed', '--seed', type=int, required=False, default=None, h
 
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
 args.resume = bool(args.resume)
+args.vox_size = args.vox_size or None
 args.gan = bool(args.gan)
 
 if args.seed is not None:
