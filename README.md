@@ -94,13 +94,17 @@ Given:
 dw=<path-to-dw-4D-data>
 dw_corr=<path-to-corrected-dw-4D-data>
 bval=<path-to-bval-file>
+bvec=<path-to-bvec-file>
+bvec_rot=<path-to-rotated-bvec-file>
 model_dir=<path-to-models>
 
 python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -o ${dw_corr}\
                                                  -tr ${model_dir}/trans_gen_best.keras\
                                                  -reg ${model_dir}/corr_best.keras\
-                                                 -b ${bval}
+                                                 -b ${bval}\
+                                                 -g ${bvec}\
+                                                 -og ${bvec_rot}
 ```
 
 ## References

@@ -23,16 +23,23 @@ parser.add_argument('-tr', '--trans', type=str, required=True, help="Path to the
 parser.add_argument('-reg', '--reg', type=str, required=True, help="Path to the pre-trained image registration model.")
 parser.add_argument('-o', '--output', type=str, required=True, help='Path to the output corrected 4D DW data or to a folder containing them.')
 parser.add_argument('-ot', '--output_trans', type=str, required=False, default=None, help='Path to the output corrected translated 4D DW data or to a folder containing them.')
+parser.add_argument('-g', '--bvecs', type=str, required=False, default=None, help="Path to the b-vector file (in FSL style). Required if -og is provided.")
+parser.add_argument('-og', '--output_bvecs', type=str, required=False, default=None, help='Path to the output rotated b-vector file or to a folder containing them.')
 parser.add_argument('-v', '--verbose', action='store_true', help='Print the b-value and the mean squared error to the b0 before and after correction for each volume.')
 
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
+if args.output_bvecs is not None and args.bvecs is None:
+    parser.error('-g/--bvecs is required when -og/--output_bvecs is provided.')
 
 out_trans = args.output_trans is not None
+out_bvecs = args.output_bvecs is not None
 
 if os.path.isdir(args.input):
     os.makedirs(args.output, exist_ok=True)
     if out_trans:
         os.makedirs(args.output_trans, exist_ok=True)
+    if out_bvecs:
+        os.makedirs(args.output_bvecs, exist_ok=True)
     inputs = glob.glob(os.path.join(args.input, '*'))
 else:
     inputs = [args.input]
@@ -95,6 +102,16 @@ def field_to_native(full_transfo, net_img, native_img):
     field *= vox_size / np.array(native_img.GetSpacing())[::-1]
     return tf.constant(field[np.newaxis], dtype=tf.float32)
 
+def rotate_bvec(rigid, bvec, spacing, flip_x):
+    # rigid is in array (z,y,x) voxel coordinates; bring the rotation to (x,y,z) physical axes
+    rot = np.asarray(rigid)[0, :3, :3][::-1, ::-1]
+    rot = np.diag(spacing) @ rot @ np.diag(1 / np.asarray(spacing))
+    u, _, vt = np.linalg.svd(rot)
+    rot = u @ vt
+    # FSL bvecs have x flipped when the voxel-to-world matrix has a positive determinant
+    flip = np.diag([-1, 1, 1]) if flip_x else np.eye(3)
+    return flip @ rot.T @ flip @ bvec
+
 
 translator = tf.keras.models.load_model(args.trans)
 translator.trainable = False
@@ -102,7 +119,8 @@ translator.trainable = False
 registrator = tf.keras.models.load_model(args.reg)
 registrator.trainable = False
 transfo_estimator = tf.keras.Model(inputs=registrator.inputs,
-                                   outputs=registrator.get_layer("compose_transfos").output)
+                                   outputs=[registrator.get_layer("compose_transfos").output,
+                                            registrator.get_layer("build_rigid_transfo").output])
 
 input_shape = translator.input_shape[1:-1]
 vox_size = eddeep.utils.get_vox_size(registrator)
@@ -111,6 +129,8 @@ if vox_size != eddeep.utils.get_vox_size(translator):
 
 bvals = np.loadtxt(args.bvals)
 ind_first_b0 = int(np.where(bvals == 0)[0][0])
+if out_bvecs:
+    bvecs = np.loadtxt(args.bvecs)
 
 for i in range(len(inputs)):
 
@@ -122,6 +142,9 @@ for i in range(len(inputs)):
     apply_corr = get_corrector()
     b0 = preproc_img(b0_net, input_shape)
     b0_trans = infer_translator(b0)
+    if out_bvecs:
+        bvecs_rot = bvecs.copy()
+        flip_x = np.linalg.det(np.reshape(b0_img.GetDirection(), (3, 3))) > 0
 
     dws_corr = []
     dws_corr_trans = []
@@ -140,7 +163,9 @@ for i in range(len(inputs)):
         if j == ind_first_b0:
             dw_corr = dws_img[..., j]
         else:
-            full_transfo = estimate_transfo(b0_trans, dw_trans)
+            full_transfo, rigid = estimate_transfo(b0_trans, dw_trans)
+            if out_bvecs:
+                bvecs_rot[:, j] = rotate_bvec(rigid, bvecs[:, j], b0_net.GetSpacing(), flip_x)
             if vox_size is None:
                 dw_corr = apply_corr(preproc_img(dw_img, input_shape, int_norm=False), full_transfo)
                 dw_corr = sitk.GetImageFromArray(dw_corr[0,...,0])
@@ -188,3 +213,10 @@ for i in range(len(inputs)):
         else:
             sitk.WriteImage(dws_corr_trans, args.output_trans)
 
+    if out_bvecs:
+        if os.path.isdir(args.input):
+            _, file_name = os.path.split(inputs[i])
+            file_name = file_name.split('.nii')[0] + '.bvec'
+            np.savetxt(os.path.join(args.output_bvecs, file_name), bvecs_rot, fmt='%.6f')
+        else:
+            np.savetxt(args.output_bvecs, bvecs_rot, fmt='%.6f')
