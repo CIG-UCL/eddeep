@@ -60,13 +60,13 @@ for i in range(len(inputs)):
     for j in trange(dws_img.GetSize()[-1], desc='img ' + str(i+1) + '/' + str(len(inputs))):
 
         dw_img = dws_img[..., j]
-        dw_net = dw_img if vox_size is None else eddeep.utils.change_img_res(dw_img, [vox_size]*3)
+        dw_net = eddeep.utils.to_vox_size(dw_img, vox_size)
         dw = preproc_img(dw_net, input_shape)
         dw_trans = infer_translator(dw)
         
         dw_trans = sitk.GetImageFromArray(dw_trans[0,...,0])
         dw_trans = eddeep.utils.unpad_image(dw_trans, dw_net.GetSize())
-        if vox_size is not None:
+        if dw_net is not dw_img:
             dw_trans.CopyInformation(dw_net)
             dw_trans = sitk.Resample(dw_trans, dw_img, sitk.Transform(), sitk.sitkLinear, 0.0, dw_trans.GetPixelID())
         

@@ -85,7 +85,7 @@ def get_corrector():
     return apply_corr
 
 def to_net_grid(img):
-    return img if vox_size is None else eddeep.utils.change_img_res(img, [vox_size]*3)
+    return eddeep.utils.to_vox_size(img, vox_size)
 
 def to_native_grid(img, native_img):
     resampler = sitk.ResampleImageFilter()
@@ -139,6 +139,7 @@ for i in range(len(inputs)):
 
     b0_img = dws_img[..., ind_first_b0]
     b0_net = to_net_grid(b0_img)
+    resampled = b0_net is not b0_img
     apply_corr = get_corrector()
     b0 = preproc_img(b0_net, input_shape)
     b0_trans = infer_translator(b0)
@@ -166,7 +167,7 @@ for i in range(len(inputs)):
             full_transfo, rigid = estimate_transfo(b0_trans, dw_trans)
             if out_bvecs:
                 bvecs_rot[:, j] = rotate_bvec(rigid, bvecs[:, j], b0_net.GetSpacing(), flip_x)
-            if vox_size is None:
+            if not resampled:
                 dw_corr = apply_corr(preproc_img(dw_img, input_shape, int_norm=False), full_transfo)
                 dw_corr = sitk.GetImageFromArray(dw_corr[0,...,0])
                 dw_corr = eddeep.utils.unpad_image(dw_corr, img_shape)
@@ -183,7 +184,7 @@ for i in range(len(inputs)):
             dw_corr_trans = eddeep.utils.unpad_image(dw_corr_trans, b0_net.GetSize())
             dw_corr_trans = sitk.Cast(dw_corr_trans, sitk.sitkFloat32)
             dw_corr_trans.CopyInformation(b0_net)
-            if vox_size is not None:
+            if resampled:
                 dw_corr_trans = to_native_grid(dw_corr_trans, b0_img)
 
             dws_corr_trans.append(dw_corr_trans)

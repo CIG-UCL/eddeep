@@ -225,6 +225,49 @@ def get_vox_size(model):
         return model.get_layer('vox_size').vox_size
     except ValueError:
         return None
+
+
+def to_vox_size(img, vox_size, tol=0.05):
+    """
+    Resample to an isotropic voxel size, unless the voxel size already matches it within a relative tolerance.
+    """
+    if vox_size is None or np.all(np.abs(np.array(img.GetSpacing()) - vox_size) <= tol * vox_size):
+        return img
+    return change_img_res(img, [vox_size]*3)
+
+
+def set_vox_size(model, vox_size):
+    """
+    Copy of a model with its voxel size set, adding the VoxSize layer after the first input if missing (e.g. older models).
+    """
+    from keras.saving import serialize_keras_object
+    from eddeep.layers import VoxSize
+    config = model.get_config()
+    names = [l['name'] for l in config['layers']]
+    if 'vox_size' in names:
+        config['layers'][names.index('vox_size')]['config']['vox_size'] = vox_size
+    else:
+        inp = config['input_layers'][0][0]
+
+        def redirect(node):
+            if isinstance(node, dict):
+                if node.get('keras_history', [None])[0] == inp:
+                    node['keras_history'] = ['vox_size', 0, 0]
+                for v in node.values(): redirect(v)
+            elif isinstance(node, (list, tuple)):
+                for v in node: redirect(v)
+
+        for l in config['layers']:
+            redirect(l['inbound_nodes'])
+        layer = serialize_keras_object(VoxSize(vox_size, name='vox_size'))
+        layer['name'] = 'vox_size'
+        layer['inbound_nodes'] = [{'args': [{'class_name': '__keras_tensor__',
+                                             'config': {'shape': list(model.get_layer(inp).batch_shape), 'dtype': 'float32',
+                                                        'keras_history': [inp, 0, 0]}}], 'kwargs': {}}]
+        config['layers'].insert(names.index(inp) + 1, layer)
+    new_model = tf.keras.Model.from_config(config)
+    new_model.set_weights(model.get_weights())
+    return new_model
     
 
 def change_img_size(img, grid_sz=[96,128,96]):
