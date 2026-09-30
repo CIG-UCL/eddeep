@@ -86,22 +86,27 @@ python ${eddeep_dir}/scripts/train_eddeep_corr.py -t ${data_train_dir}\
                                                   -e 200 -as 0.5
 ```
 
+## Pre-trained models
+Pre-trained models (2 mm) are provided in `models/`, as described in [2]:
+  - **eddeep**: translator `trans.keras`, trained without augmentation, and registrator `corr.keras`.
+  - **eddeep+**: translator `trans_plus.keras`, trained with augmentation (probability 0.5), and registrator `corr_plus.keras`.
+
 ## Correct for eddy distortions with a pre-trained **Eddeep**
 Given:
-  - A pre-trained **Eddeep** translator (e.g. `trans_gen_best.keras`).
-  - A pre-trained **Eddeep** registrator (e.g. `corr_best.keras`).
+  - A pre-trained **Eddeep** translator (e.g. `trans_plus.keras`).
+  - A pre-trained **Eddeep** registrator (e.g. `corr_plus.keras`).
 ```bash
 dw=<path-to-dw-4D-data>
 dw_corr=<path-to-corrected-dw-4D-data>
 bval=<path-to-bval-file>
 bvec=<path-to-bvec-file>
 bvec_rot=<path-to-rotated-bvec-file>
-model_dir=<path-to-models>
+model_dir=${eddeep_dir}/models
 
 python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -o ${dw_corr}\
-                                                 -tr ${model_dir}/trans_gen_best.keras\
-                                                 -reg ${model_dir}/corr_best.keras\
+                                                 -tr ${model_dir}/trans_plus.keras\
+                                                 -reg ${model_dir}/corr_plus.keras\
                                                  -b ${bval}\
                                                  -g ${bvec}\
                                                  -og ${bvec_rot}
@@ -116,10 +121,14 @@ If you used **Eddeep** for your work, please cite the following:
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Eddeep: Fast eddy-current distortion correction for diffusion MRI with deep learning.  
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; MICCAI (2024) [[arxiv]](https://arxiv.org/pdf/2405.10723)
 
+&nbsp;[2] A. Legouhy, R. Callaghan, Y. Qiao, W. Stee, P. Peigneux, H. Azadbakht and H. Zhang.  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Eddeep: a deep-learning framework for fast eddy-current distortion correction in diffusion MRI.  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Preprint (2026) [[arxiv]](https://arxiv.org/abs/2607.26292)
+
 The code uses bits from Neurite and Voxelmorph:
 
-&nbsp;[2] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)\
-&nbsp;[3] **Neurite** [[github]](https://github.com/adalca/neurite)
+&nbsp;[3] **Voxelmorph** [[github]](https://github.com/voxelmorph/voxelmorph) [[arxiv]](https://arxiv.org/abs/1809.05231)\
+&nbsp;[4] **Neurite** [[github]](https://github.com/adalca/neurite)
 
 
 
