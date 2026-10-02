@@ -10,7 +10,6 @@ import SimpleITK as sitk
 from tqdm import trange
 
 import eddeep
-from external import voxelmorph
 
 print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
 
@@ -25,6 +24,7 @@ parser.add_argument('-o', '--output', type=str, required=True, help='Path to the
 parser.add_argument('-ot', '--output_trans', type=str, required=False, default=None, help='Path to the output corrected translated 4D DW data or to a folder containing them.')
 parser.add_argument('-g', '--bvecs', type=str, required=False, default=None, help="Path to the b-vector file (in FSL style). Required if -og is provided.")
 parser.add_argument('-og', '--output_bvecs', type=str, required=False, default=None, help='Path to the output rotated b-vector file or to a folder containing them.')
+parser.add_argument('-in', '--interp', type=str, required=False, default='linear', choices=['linear', 'spline'], help="Interpolation for the final resampling: 'linear' (trilinear) or 'spline' (cubic B-spline). Default: linear.")
 parser.add_argument('-v', '--verbose', action='store_true', help='Print the b-value and the mean squared error to the b0 before and after correction for each volume.')
 
 args = parser.parse_args(args=None if sys.argv[1:] else ['--help'])
@@ -33,6 +33,7 @@ if args.output_bvecs is not None and args.bvecs is None:
 
 out_trans = args.output_trans is not None
 out_bvecs = args.output_bvecs is not None
+interp = {'linear': sitk.sitkLinear, 'spline': sitk.sitkBSpline}[args.interp]
 
 if os.path.isdir(args.input):
     os.makedirs(args.output, exist_ok=True)
@@ -46,8 +47,9 @@ else:
 
 #%%
 
-def preproc_img(dw, input_shape, int_norm=True):
+def preproc_img(dw, input_shape, vox_size, int_norm=True):
 
+    dw = eddeep.utils.to_vox_size(dw, vox_size)
     dw = sitk.Cast(dw, sitk.sitkFloat32)
     dw = sitk.Clamp(dw, lowerBound=0.0)
     dw = eddeep.utils.pad_image(dw, out_size=np.flip(input_shape))
@@ -69,23 +71,6 @@ def infer_registrator(b0_trans, dw_trans):
 def estimate_transfo(b0_trans, dw_trans):
     return transfo_estimator([b0_trans, dw_trans], training=False)
 
-def get_corrector():
-    # layers are built for a fixed image shape, which varies across inputs on the native grid
-    warp_layer = voxelmorph.layers.SpatialTransformer(interp_method="linear", indexing="ij")
-    jac_layer = eddeep.layers.JacobianMultiplyIntensities(indexing='ij', is_shift=True)
-    @tf.function
-    def apply_corr(dw, full_transfo):
-
-        dw = tf.cast(dw, tf.float32)
-        dw_corr = warp_layer([dw, full_transfo])
-        dw_corr = jac_layer([dw_corr, full_transfo])
-
-        return dw_corr
-
-    return apply_corr
-
-def to_net_grid(img):
-    return eddeep.utils.to_vox_size(img, vox_size)
 
 def to_native_grid(img, native_img):
     resampler = sitk.ResampleImageFilter()
@@ -93,14 +78,33 @@ def to_native_grid(img, native_img):
     resampler.SetUseNearestNeighborExtrapolator(True)
     return resampler.Execute(img)
 
-def field_to_native(full_transfo, net_img, native_img):
-    field = sitk.GetImageFromArray(np.asarray(full_transfo[0], dtype=np.float64), isVector=True)
-    field = eddeep.utils.unpad_image(field, net_img.GetSize())
-    field.CopyInformation(net_img)
-    field = sitk.GetArrayFromImage(to_native_grid(field, native_img))
-    # shifts are in voxels of the network grid, (z,y,x) order
-    field *= vox_size / np.array(native_img.GetSpacing())[::-1]
-    return tf.constant(field[np.newaxis], dtype=tf.float32)
+def field_net2phys(disp_field, net_img, native_img):
+
+    disp_field = np.asarray(disp_field[0], dtype=np.float64)
+    # shifts in voxels of the network grid, (z,y,x) order -> mm along the image axes, (x,y,z) order
+    disp_field = sitk.GetImageFromArray(np.ascontiguousarray(disp_field[..., ::-1] * net_img.GetSpacing()), isVector=True)
+    disp_field = eddeep.utils.unpad_image(disp_field, net_img.GetSize())
+    disp_field.CopyInformation(net_img)
+    if net_img is not native_img:
+        disp_field = to_native_grid(disp_field, native_img)
+    jac = sitk.Abs(sitk.DisplacementFieldJacobianDeterminant(disp_field))
+    # mm along the image axes -> world displacements
+    disp_world = sitk.GetImageFromArray(sitk.GetArrayFromImage(disp_field) @ np.reshape(native_img.GetDirection(), (3, 3)).T, isVector=True)
+    disp_world.CopyInformation(disp_field)
+
+    return disp_world, jac
+
+def correct(dw_img, disp_field, jac, interp):
+
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetReferenceImage(dw_img)
+    resampler.SetTransform(sitk.DisplacementFieldTransform(disp_field))
+    resampler.SetInterpolator(interp)
+    resampler.SetUseNearestNeighborExtrapolator(True)
+    dw = sitk.Clamp(sitk.Cast(dw_img, sitk.sitkFloat32), lowerBound=0.0)
+    dw = sitk.Clamp(resampler.Execute(dw), lowerBound=0.0)
+
+    return dw * sitk.Cast(jac, sitk.sitkFloat32)
 
 def rotate_bvec(rigid, bvec, spacing, flip_x):
     # rigid is in array (z,y,x) voxel coordinates; bring the rotation to (x,y,z) physical axes
@@ -135,13 +139,10 @@ if out_bvecs:
 for i in range(len(inputs)):
 
     dws_img = sitk.ReadImage(inputs[i])
-    img_shape = dws_img.GetSize()[:-1]
-
     b0_img = dws_img[..., ind_first_b0]
-    b0_net = to_net_grid(b0_img)
+    b0_net = eddeep.utils.to_vox_size(b0_img, vox_size)
     resampled = b0_net is not b0_img
-    apply_corr = get_corrector()
-    b0 = preproc_img(b0_net, input_shape)
+    b0 = preproc_img(b0_net, input_shape, vox_size)
     b0_trans = infer_translator(b0)
     if out_bvecs:
         bvecs_rot = bvecs.copy()
@@ -152,7 +153,7 @@ for i in range(len(inputs)):
     for j in trange(dws_img.GetSize()[-1], desc='img ' + str(i+1) + '/' + str(len(inputs))):
 
         dw_img = dws_img[..., j]
-        dw = preproc_img(to_net_grid(dw_img), input_shape)
+        dw = preproc_img(dw_img, input_shape, vox_size)
         dw_trans = infer_translator(dw)
 
         if out_trans or args.verbose:
@@ -164,18 +165,11 @@ for i in range(len(inputs)):
         if j == ind_first_b0:
             dw_corr = dws_img[..., j]
         else:
-            full_transfo, rigid = estimate_transfo(b0_trans, dw_trans)
+            disp_field, rigid = estimate_transfo(b0_trans, dw_trans)
             if out_bvecs:
                 bvecs_rot[:, j] = rotate_bvec(rigid, bvecs[:, j], b0_net.GetSpacing(), flip_x)
-            if not resampled:
-                dw_corr = apply_corr(preproc_img(dw_img, input_shape, int_norm=False), full_transfo)
-                dw_corr = sitk.GetImageFromArray(dw_corr[0,...,0])
-                dw_corr = eddeep.utils.unpad_image(dw_corr, img_shape)
-            else:
-                dw = sitk.Clamp(sitk.Cast(dw_img, sitk.sitkFloat32), lowerBound=0.0)
-                dw = sitk.GetArrayFromImage(dw)[np.newaxis,..., np.newaxis]
-                dw_corr = apply_corr(dw, field_to_native(full_transfo, b0_net, b0_img))
-                dw_corr = sitk.GetImageFromArray(dw_corr[0,...,0])
+            disp_field, jac = field_net2phys(disp_field, b0_net, b0_img)
+            dw_corr = correct(dw_img, disp_field, jac, interp)
             dw_corr = sitk.Cast(dw_corr, b0_img.GetPixelID())
             dw_corr.CopyInformation(b0_img)
 

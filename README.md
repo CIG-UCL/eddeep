@@ -111,6 +111,8 @@ python ${eddeep_dir}/scripts/apply_correction.py -i ${dw}\
                                                  -g ${bvec}\
                                                  -og ${bvec_rot}
 ```
+Interpolation (`-in`): the final resampling is trilinear by default (`linear`, as in the paper); `spline` uses cubic B-splines with recursive prefiltering instead.
+
 Rotated b-vectors (`-og`): the rigid component of the estimated transformation, $R(x) = Ox + t$, is estimated relative to the first b=0 volume on the isotropic grid. The acquired volume shows the subject rotated by $O$, so each b-vector $g$ becomes $g' = O^\top g$; the translation $t$ and the eddy-current component are ignored. In FSL convention (voxel axes, first axis flipped when the orientation matrix has a positive determinant), this reads $g' = F O^\top F g$ with $F = \mathrm{diag}(-1,1,1)$ if flipped, $I$ otherwise.
 
 ## References
